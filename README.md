@@ -69,6 +69,11 @@ config/entitlements.json   # which buyers are entitled to which surfaces/scopes
 All three fail closed: an invalid or missing file stops the node from starting rather than
 running with a silently different access set than intended.
 
+Switching to a different publisher is just swapping these three files — no code change.
+[`config/examples/pilot-publisher/`](config/examples/pilot-publisher/) is a worked example:
+copy its three JSONs over `config/*.json` (or bind-mount them in `docker-compose.yml`) and
+restart the node.
+
 ## Data protection
 
 This node treats buyer identity as pseudonymous by design: raw `buyer_id` values never enter the

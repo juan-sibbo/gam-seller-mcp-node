@@ -1,0 +1,9 @@
+{
+  "dsr_contact": "privacy@pilot-publisher.example",
+  "controller_model": "publisher-controller-node-processor",
+  "controller_name": "Pilot Publisher (demo)",
+  "retention": {
+    "hot_days": 90,
+    "archive_months": 12
+  }
+}
