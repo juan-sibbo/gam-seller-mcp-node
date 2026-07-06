@@ -16,6 +16,7 @@ import { RateLimiter } from "./rate-limiter/limiter.js";
 import { ForecastEngine } from "./forecast/engine.js";
 import { loadDeploymentConfigFromFile } from "./config/deployment.js";
 import { AuditLedger, DEV_LEDGER_PATH } from "./audit/ledger.js";
+import { ReplayGuard } from "./audit/replay.js";
 import { PseudonymService, DEV_PSEUDONYM_KEYS_PATH } from "./audit/pseudonym.js";
 import { HeadHashAnchor, DEV_ANCHOR_PATH, ANCHOR_INTERVAL_MS } from "./audit/anchor.js";
 import { EventClass } from "./audit/event.js";
@@ -34,10 +35,11 @@ interface ServerDeps {
   forecastEngine: ForecastEngine;
   forecastRateLimiter: RateLimiter;
   ledger: AuditLedger;
+  replayGuard: ReplayGuard;
 }
 
 function buildServer(deps: ServerDeps): McpServer {
-  const { store, validator, wellKnown, catalog, rateLimiter, forecastEngine, forecastRateLimiter, ledger } = deps;
+  const { store, validator, wellKnown, catalog, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard } = deps;
   const policy = new PolicyEngine(store);
 
   const server = new McpServer({
@@ -89,6 +91,15 @@ function buildServer(deps: ServerDeps): McpServer {
     };
   }
 
+  function replayResult(request_id: string) {
+    // Generic message — a replayed request must not be distinguishable from any other
+    // invalid request (soap-fault-redaction-signoff §2).
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(makeSafeError(ErrorCode.INVALID_REQUEST, "Invalid request.", request_id, CONTRACT_VERSION)) }],
+      isError: true,
+    };
+  }
+
   function rateLimitedResult(request_id: string) {
     // soap-fault-redaction-signoff §2: generic message, no quota value exposed.
     return {
@@ -122,9 +133,19 @@ function buildServer(deps: ServerDeps): McpServer {
     {
       buyer_id: z.string().describe("Buyer identifier (opaque, B2B)"),
       token: z.string().optional().describe("Domain-2 inter-service JWT (RS256)"),
+      client_request_id: z.string().optional().describe("Client-supplied idempotency key for replay detection"),
     },
-    async ({ buyer_id, token }) => {
+    async ({ buyer_id, token, client_request_id }) => {
       const request_id = randomUUID();
+
+      // Replay check first (SEC-GATE-3) — before auth, so a replayed request never even
+      // reaches token validation. No client_request_id → no dedupe (back-compat).
+      if (client_request_id !== undefined) {
+        if (replayGuard.isReplay(client_request_id)) {
+          return replayResult(request_id);
+        }
+        replayGuard.record(client_request_id);
+      }
 
       if (!(await authenticate(token, buyer_id, AllowedSurface.PRODUCT_DISCOVERY, request_id))) {
         return authFailedResult(request_id);
@@ -219,6 +240,7 @@ async function main() {
   const rateLimiter = new RateLimiter();
   const forecastEngine = new ForecastEngine();
   const forecastRateLimiter = new RateLimiter();
+  const replayGuard = new ReplayGuard();
 
   // Audit chain: pseudonymized ledger + external head-hash anchoring (S3, wired S7).
   const pseudonyms = new PseudonymService(DEV_PSEUDONYM_KEYS_PATH);
@@ -227,7 +249,7 @@ async function main() {
   anchorHead(ledger, anchor); // anchor whatever survived the previous run
   setInterval(() => anchorHead(ledger, anchor), ANCHOR_INTERVAL_MS).unref();
 
-  const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, rateLimiter, forecastEngine, forecastRateLimiter, ledger };
+  const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard };
 
   // Fase A: --http serves StreamableHTTP on 127.0.0.1 (external bind = infra act, #8/#10).
   // Default remains stdio for MCP-host usage.

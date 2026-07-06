@@ -14,6 +14,7 @@ import { EntitlementStore, TEST_ENTITLEMENTS_DEMO_CONFIG } from "../src/policy/e
 import { RateLimiter } from "../src/rate-limiter/limiter.js";
 import { AuditLedger, createMemoryLedger } from "../src/audit/ledger.js";
 import { EventClass } from "../src/audit/event.js";
+import { ReplayGuard } from "../src/audit/replay.js";
 
 // Integration tests over the REAL MCP surface (server.ts tool handlers) via linked
 // in-memory transports — no stdio, no disk. This is what the 207 module tests did
@@ -49,6 +50,7 @@ async function setupServer(): Promise<TestContext> {
     forecastEngine: new ForecastEngine(),
     forecastRateLimiter: new RateLimiter(),
     ledger,
+    replayGuard: new ReplayGuard(),
   });
 
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -154,6 +156,41 @@ describe("server integration — discover_products", () => {
     const envelope = JSON.parse(firstText(second));
     expect(envelope.code).toBe("RATE_LIMITED");
     expect(envelope.message).not.toMatch(/30|quota|limit=|window/i);
+  });
+
+  it("SEC-GATE-3: a repeated client_request_id is denied as INVALID_REQUEST with a generic message", async () => {
+    const first = await ctx.client.callTool({
+      name: "discover_products",
+      arguments: { buyer_id: ENTITLED_BUYER, client_request_id: "dup-1" },
+    });
+    expect(first.isError).toBeFalsy();
+
+    const second = await ctx.client.callTool({
+      name: "discover_products",
+      arguments: { buyer_id: ENTITLED_BUYER, client_request_id: "dup-1" },
+    });
+    expect(second.isError).toBe(true);
+    const envelope = JSON.parse(firstText(second));
+    expect(envelope.code).toBe("INVALID_REQUEST");
+    expect(envelope.message).not.toMatch(/replay|duplicate|seen/i);
+
+    // The replay must be caught before auth/policy even run for the second call.
+    expect(ctx.ledger.allEntries().filter((e) => e.event_class === EventClass.SCOPE_RESOLUTION)).toHaveLength(1);
+  });
+
+  it("without client_request_id, repeated calls are not deduped (back-compat)", async () => {
+    const first = await ctx.client.callTool({
+      name: "discover_products",
+      arguments: { buyer_id: ENTITLED_BUYER },
+    });
+    expect(first.isError).toBeFalsy();
+
+    // Use a distinct entitled buyer so this isn't caught by the rate limiter instead.
+    const second = await ctx.client.callTool({
+      name: "discover_products",
+      arguments: { buyer_id: "pilot-buyer-001" },
+    });
+    expect(second.isError).toBeFalsy();
   });
 });
 
