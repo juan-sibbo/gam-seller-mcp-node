@@ -1,0 +1,18 @@
+# GAM Seller MCP Node — despliegue dev/demo (Fase B)
+# Publish en loopback del host: exposición externa gateada por blockers #8/#10.
+services:
+  seller-mcp-node:
+    build: .
+    ports:
+      - "127.0.0.1:3900:3900"
+    volumes:
+      # Estado persistente en named volumes (claves RS256, ledger, denylist, anchors)
+      - mcp-keys:/app/keys
+      - mcp-data:/app/data
+      # Config legal por despliegue — editable en el host sin rebuild
+      - ./config:/app/config:ro
+    restart: unless-stopped
+
+volumes:
+  mcp-keys:
+  mcp-data:

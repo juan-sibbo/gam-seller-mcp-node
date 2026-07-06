@@ -1,0 +1,9 @@
+{
+  "dsr_contact": "privacy@sibboventures.com",
+  "controller_model": "operator-controller",
+  "controller_name": "Sibbo (dev/demo deployment)",
+  "retention": {
+    "hot_days": 90,
+    "archive_months": 12
+  }
+}

@@ -1,0 +1,24 @@
+node_modules/
+dist/
+*.js.map
+
+# RS256 keys MUST stay out of repo (domain-2 identity signoff §3 + hard rule #2)
+keys/
+*.pem
+*.p8
+*.key
+*.pub
+*.jwk
+
+# Dev secrets
+.env
+.env.*
+!.env.example
+
+# SQLite dev databases
+*.db
+*.sqlite
+
+# OS
+.DS_Store
+Thumbs.db

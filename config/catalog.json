@@ -1,0 +1,32 @@
+{
+  "families": [
+    {
+      "family_id": "display-ros",
+      "label": "Run of Site — Display",
+      "consent_context": null,
+      "legal_basis_provenance": null
+    },
+    {
+      "family_id": "video-pre-roll",
+      "label": "Pre-Roll Video",
+      "consent_context": null,
+      "legal_basis_provenance": null
+    },
+    {
+      "family_id": "branded-content",
+      "label": "Branded Content Placements",
+      "consent_context": null,
+      "legal_basis_provenance": null
+    },
+    {
+      "family_id": "native-feed",
+      "label": "Native In-Feed",
+      "consent_context": null,
+      "legal_basis_provenance": null
+    }
+  ],
+  "buyer_access": {
+    "test-buyer-001": ["display-ros", "video-pre-roll", "branded-content"],
+    "pilot-buyer-001": ["display-ros", "branded-content", "native-feed"]
+  }
+}

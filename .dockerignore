@@ -1,0 +1,11 @@
+node_modules
+dist
+data
+keys
+tests
+demo
+*.md
+.gitignore
+Dockerfile
+docker-compose.yml
+vitest.config.ts
