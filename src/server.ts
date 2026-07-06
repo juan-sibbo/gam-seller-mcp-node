@@ -3,7 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { pathToFileURL } from "url";
 import { PolicyEngine } from "./policy/engine.js";
-import { EntitlementStore, DEFAULT_ENTITLEMENTS_CONFIG } from "./policy/entitlements.js";
+import { EntitlementStore, loadEntitlementsFromFile } from "./policy/entitlements.js";
 import { AllowedSurface } from "./policy/types.js";
 import { ErrorCode, makeSafeError } from "./errors/envelope.js";
 import { loadOrCreateKeyPair } from "./identity/keystore.js";
@@ -245,7 +245,9 @@ async function main() {
   const issuer = new TokenIssuer(keyPair.privateKey);
   const validator = new TokenValidator(keyPair.publicKey, denylist);
   const wellKnown = new WellKnownService(keyPair.privateKey, keyPair.publicKey, deployment);
-  const store = new EntitlementStore(DEFAULT_ENTITLEMENTS_CONFIG);
+  // Fail-closed: an invalid entitlements config (unknown surface, empty buyer_id) must
+  // prevent startup — loadEntitlementsFromFile throws before anything serves.
+  const store = new EntitlementStore(loadEntitlementsFromFile());
   const catalog = loadCatalogFromFile();
   const rateLimiter = new RateLimiter();
   const forecastEngine = new ForecastEngine();

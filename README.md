@@ -61,13 +61,13 @@ npx tsx demo/run-demo.ts   # scripted walkthrough of all three tools + the audit
 Catalog and legal/DSR settings are driven by JSON files under `config/`, no code changes needed:
 
 ```
-config/deployment.json    # DSR contact, controller model, retention window
-config/catalog.json       # product families + which buyers can see which families
+config/deployment.json     # DSR contact, controller model, retention window
+config/catalog.json        # product families + which buyers can see which families
+config/entitlements.json   # which buyers are entitled to which surfaces/scopes
 ```
 
-Buyer entitlements (who is allowed to call which surface) currently live as fixtures in
-`src/policy/entitlements.ts` — moving them to a config file, the same way catalog and deployment
-already work, is the next planned step.
+All three fail closed: an invalid or missing file stops the node from starting rather than
+running with a silently different access set than intended.
 
 ## Data protection
 

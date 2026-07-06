@@ -1,3 +1,6 @@
+import { readFileSync } from "fs";
+import { fileURLToPath } from "url";
+import { join, dirname } from "path";
 import type { Entitlement } from "./types.js";
 import { AllowedSurface } from "./types.js";
 
@@ -66,6 +69,64 @@ export class EntitlementStore {
 export const DEFAULT_ENTITLEMENTS_CONFIG: EntitlementsConfig = {
   entitlements: [],
 };
+
+const VALID_SURFACES: ReadonlySet<string> = new Set(Object.values(AllowedSurface));
+
+// Fail-closed validation: a node with an invalid entitlements config must not start
+// (same criterion as config/deployment.ts) — silently ignoring a malformed entry would
+// mean serving with a different access set than whoever wrote the file intended.
+// An explicitly empty `entitlements: []` is a valid deployment state (Default-Deny already
+// covers it), not an error.
+export function validateEntitlementsConfig(raw: unknown): EntitlementsConfig {
+  if (typeof raw !== "object" || raw === null) {
+    throw new Error("entitlements config: not an object");
+  }
+  const entitlements = (raw as Record<string, unknown>)["entitlements"];
+  if (!Array.isArray(entitlements)) {
+    throw new Error("entitlements config: entitlements must be an array");
+  }
+
+  return {
+    entitlements: entitlements.map((entry, i) => {
+      if (typeof entry !== "object" || entry === null) {
+        throw new Error(`entitlements config: entitlements[${i}] is not an object`);
+      }
+      const e = entry as Record<string, unknown>;
+
+      const buyerId = e["buyer_id"];
+      if (typeof buyerId !== "string" || buyerId.trim() === "") {
+        throw new Error(`entitlements config: entitlements[${i}].buyer_id must be a non-empty string`);
+      }
+
+      const surfaces = e["surfaces"];
+      if (!Array.isArray(surfaces) || !surfaces.every((s) => typeof s === "string" && VALID_SURFACES.has(s))) {
+        throw new Error(
+          `entitlements config: entitlements[${i}].surfaces must only contain ${[...VALID_SURFACES].join(", ")}`
+        );
+      }
+
+      const scopes = e["scopes"];
+      if (!Array.isArray(scopes) || scopes.length === 0 || !scopes.every((s) => typeof s === "string")) {
+        throw new Error(`entitlements config: entitlements[${i}].scopes must be a non-empty string array`);
+      }
+
+      const phase = e["phase"];
+      if (typeof phase !== "string" || phase.trim() === "") {
+        throw new Error(`entitlements config: entitlements[${i}].phase must be a non-empty string`);
+      }
+
+      return { buyer_id: buyerId, surfaces: surfaces as AllowedSurface[], scopes, phase };
+    }),
+  };
+}
+
+export function loadEntitlementsFromFile(configPath?: string): EntitlementsConfig {
+  const path =
+    configPath ??
+    join(dirname(fileURLToPath(import.meta.url)), "../../config/entitlements.json");
+  const raw = readFileSync(path, "utf-8");
+  return validateEntitlementsConfig(JSON.parse(raw));
+}
 
 // Test fixture: a buyer with minimal allowed surfaces for S1 tests.
 export const TEST_ENTITLEMENTS_CONFIG: EntitlementsConfig = {

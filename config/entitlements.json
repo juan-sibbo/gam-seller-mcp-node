@@ -1,0 +1,10 @@
+{
+  "entitlements": [
+    {
+      "buyer_id": "pilot-buyer-001",
+      "surfaces": ["discovery", "well_known", "product_discovery", "forecast"],
+      "scopes": ["gam.readonly"],
+      "phase": "phase-1-readonly"
+    }
+  ]
+}
