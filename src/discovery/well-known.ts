@@ -74,8 +74,14 @@ function buildPrivacyPosture(deployment: DeploymentConfig): PrivacyPosture {
 export const WELL_KNOWN_PATH = "/.well-known/seller-mcp-capabilities";
 export const WELL_KNOWN_CACHE_TTL_SECONDS = 840; // 14 min, within ≤15 min SLO
 
+// Renew at 90% of the JWT TTL, not 100% — leaves margin so a cached doc handed to a buyer
+// is never seen expiring mid-flight (effective cache lifetime ~756s of the 840s TTL).
+const CACHE_FRESH_MS = WELL_KNOWN_CACHE_TTL_SECONDS * 1000 * 0.9;
+
 export class WellKnownService {
   private readonly privacyPosture: PrivacyPosture;
+  private cachedSigned?: string;
+  private cachedAtMs?: number;
 
   constructor(
     private readonly privateKey: KeyLike,
@@ -86,7 +92,14 @@ export class WellKnownService {
     this.privacyPosture = buildPrivacyPosture(deployment);
   }
 
+  // C2 (Fase C): the well-known endpoint is public and unauthenticated — re-signing RS256
+  // on every call is a free CPU-exhaustion vector for an attacker. Cache and reuse the JWS
+  // while it's still fresh instead.
   async sign(): Promise<string> {
+    if (this.cachedSigned !== undefined && this.cachedAtMs !== undefined && Date.now() - this.cachedAtMs < CACHE_FRESH_MS) {
+      return this.cachedSigned;
+    }
+
     const doc: WellKnownDocument = {
       node_id: this.nodeId,
       version: CONTRACT_VERSION,
@@ -105,6 +118,8 @@ export class WellKnownService {
       .setJti(randomUUID())
       .sign(this.privateKey);
 
+    this.cachedSigned = signed;
+    this.cachedAtMs = Date.now();
     return signed;
   }
 
@@ -118,5 +133,11 @@ export class WellKnownService {
 
   getPrivacyPosture(): PrivacyPosture {
     return { ...this.privacyPosture };
+  }
+
+  // Test/ops hook — forces the next sign() to re-sign instead of reusing the cache.
+  clearCache(): void {
+    this.cachedSigned = undefined;
+    this.cachedAtMs = undefined;
   }
 }

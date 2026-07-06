@@ -185,6 +185,31 @@ describe("WellKnownService — signed capability document", () => {
     });
   });
 
+  describe("signing cache (C2 — DoS fix: sign() must not re-sign RS256 on every call)", () => {
+    it("returns the same signed document on consecutive calls", async () => {
+      const svc = new WellKnownService(privateKey, publicKey, TEST_DEPLOYMENT_CONFIG);
+      const a = await svc.sign();
+      const b = await svc.sign();
+      expect(b).toBe(a);
+    });
+
+    it("signs a new document once the cache is cleared", async () => {
+      const svc = new WellKnownService(privateKey, publicKey, TEST_DEPLOYMENT_CONFIG);
+      const a = await svc.sign();
+      svc.clearCache();
+      const b = await svc.sign();
+      expect(b).not.toBe(a);
+    });
+
+    it("a cached document still verifies", async () => {
+      const svc = new WellKnownService(privateKey, publicKey, TEST_DEPLOYMENT_CONFIG);
+      await svc.sign();
+      const cached = await svc.sign();
+      const doc = await svc.verify(cached);
+      expect(doc).toBeDefined();
+    });
+  });
+
   describe("well-known URI", () => {
     it("canonical path is /.well-known/seller-mcp-capabilities (e12-signoff §5)", () => {
       expect(WELL_KNOWN_PATH).toBe("/.well-known/seller-mcp-capabilities");
