@@ -178,9 +178,19 @@ function buildServer(deps: ServerDeps): McpServer {
       family_id: z.string().describe("Product family ID from discover_products"),
       period: z.string().describe("Target period (e.g. Q4-2026, 2026-10)"),
       token: z.string().optional().describe("Domain-2 inter-service JWT (RS256)"),
+      client_request_id: z.string().optional().describe("Client-supplied idempotency key for replay detection"),
     },
-    async ({ buyer_id, family_id, period, token }) => {
+    async ({ buyer_id, family_id, period, token, client_request_id }) => {
       const request_id = randomUUID();
+
+      // Replay check first (SEC-GATE-3) — before auth, so a replayed request never even
+      // reaches token validation. No client_request_id → no dedupe (back-compat).
+      if (client_request_id !== undefined) {
+        if (replayGuard.isReplay(client_request_id)) {
+          return replayResult(request_id);
+        }
+        replayGuard.record(client_request_id);
+      }
 
       if (!(await authenticate(token, buyer_id, AllowedSurface.FORECAST, request_id))) {
         return authFailedResult(request_id);

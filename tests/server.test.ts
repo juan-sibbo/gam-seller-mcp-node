@@ -244,4 +244,39 @@ describe("server integration — get_forecast", () => {
     expect(ctx.ledger.size()).toBeGreaterThanOrEqual(3);
     expect(ctx.ledger.replayVerify().valid).toBe(true);
   });
+
+  it("SEC-GATE-3: a repeated client_request_id is denied as INVALID_REQUEST with a generic message", async () => {
+    const first = await ctx.client.callTool({
+      name: "get_forecast",
+      arguments: { buyer_id: ENTITLED_BUYER, family_id: "fam-demo-01", period: "Q4-2026", client_request_id: "dup-fc-1" },
+    });
+    expect(first.isError).toBeFalsy();
+
+    const second = await ctx.client.callTool({
+      name: "get_forecast",
+      arguments: { buyer_id: ENTITLED_BUYER, family_id: "fam-demo-01", period: "Q4-2026", client_request_id: "dup-fc-1" },
+    });
+    expect(second.isError).toBe(true);
+    const envelope = JSON.parse(firstText(second));
+    expect(envelope.code).toBe("INVALID_REQUEST");
+    expect(envelope.message).not.toMatch(/replay|duplicate|seen/i);
+
+    // The replay must be caught before auth/policy even run for the second call.
+    expect(ctx.ledger.allEntries().filter((e) => e.event_class === EventClass.FORECAST_REQUEST)).toHaveLength(1);
+  });
+
+  it("without client_request_id, repeated calls are not deduped (back-compat)", async () => {
+    const first = await ctx.client.callTool({
+      name: "get_forecast",
+      arguments: { buyer_id: ENTITLED_BUYER, family_id: "fam-demo-01", period: "Q4-2026" },
+    });
+    expect(first.isError).toBeFalsy();
+
+    // Use a distinct entitled buyer so this isn't caught by the rate limiter instead.
+    const second = await ctx.client.callTool({
+      name: "get_forecast",
+      arguments: { buyer_id: "pilot-buyer-001", family_id: "fam-demo-01", period: "Q4-2026" },
+    });
+    expect(second.isError).toBeFalsy();
+  });
 });
