@@ -1,5 +1,7 @@
 # GAM Seller MCP Node
 
+[![CI](https://github.com/juan-sibbo/gam-seller-mcp-node/actions/workflows/ci.yml/badge.svg)](https://github.com/juan-sibbo/gam-seller-mcp-node/actions/workflows/ci.yml)
+
 A governed, **read-only** [Model Context Protocol](https://modelcontextprotocol.io) server that
 exposes ad-inventory discovery from the sell side (Google Ad Manager and similar systems) to
 buyer-side agents — without ever touching the ad server itself, and without a buyer agent ever
