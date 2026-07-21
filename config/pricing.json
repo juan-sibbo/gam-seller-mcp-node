@@ -1,8 +1,8 @@
 {
   "prices": [
-    { "family_id": "display-ros", "currency": "EUR", "list_price": 4.5 },
-    { "family_id": "video-pre-roll", "currency": "EUR", "list_price": 18 },
-    { "family_id": "branded-content", "currency": "EUR", "list_price": 45 },
-    { "family_id": "native-feed", "currency": "EUR", "list_price": 12 }
+    { "family_id": "display-ros", "currency": "EUR", "list_price": 4.5, "valid_until": "2026-12-31T23:59:59Z" },
+    { "family_id": "video-pre-roll", "currency": "EUR", "list_price": 18, "valid_until": "2026-12-31T23:59:59Z" },
+    { "family_id": "branded-content", "currency": "EUR", "list_price": 45, "valid_until": "2026-12-31T23:59:59Z" },
+    { "family_id": "native-feed", "currency": "EUR", "list_price": 12, "valid_until": "2026-12-31T23:59:59Z" }
   ]
 }
