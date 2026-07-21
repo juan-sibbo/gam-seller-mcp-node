@@ -77,13 +77,26 @@ function parseToolText(result: Awaited<ReturnType<Client["callTool"]>>): unknown
   return JSON.parse(content[0].text);
 }
 
+// well_known_capabilities returns a JWS compact serialisation (header.payload.sig).
+// Decode the base64url payload segment to read the document fields.
+function decodeJwsPayload(jws: string): Record<string, unknown> {
+  const segment = jws.split(".")[1];
+  if (!segment) throw new Error(`Not a JWS compact form: ${jws.slice(0, 40)}`);
+  const json = Buffer.from(segment, "base64url").toString("utf-8");
+  return JSON.parse(json) as Record<string, unknown>;
+}
+
 describe("D9 — complete buyer agent session (well_known → discover → forecast)", () => {
   it("step 1: well_known_capabilities returns a verifiable trust anchor", async () => {
     const client = await connectClient();
     const result = await client.callTool({ name: "well_known_capabilities", arguments: {} });
 
     expect(result.isError).toBeFalsy();
-    const doc = parseToolText(result) as Record<string, unknown>;
+    // The tool returns a JWS compact form (RS256-signed document, E-12).
+    // Decode the payload segment to validate the document structure.
+    const jws = (result.content as Array<{ text: string }>)[0].text;
+    expect(jws.split(".")).toHaveLength(3); // must be a valid JWS compact
+    const doc = decodeJwsPayload(jws);
 
     // Trust anchor structure (E-12)
     expect(typeof doc["node_id"]).toBe("string");
@@ -139,8 +152,9 @@ describe("D9 — complete buyer agent session (well_known → discover → forec
     expect(result.isError).toBeFalsy();
     const body = parseToolText(result) as Record<string, unknown>;
 
-    // Bucket must be one of the three ratified values (blocker #6)
-    expect(["Low", "Mid", "High"]).toContain(body["bucket"]);
+    // Bucket must be one of the three ratified values (blocker #6).
+    // Engine uses lowercase: "low" | "mid" | "high".
+    expect(["low", "mid", "high"]).toContain(body["bucket"]);
     expect(typeof body["family_id"]).toBe("string");
     expect(typeof body["period"]).toBe("string");
 
@@ -159,7 +173,8 @@ describe("D9 — complete buyer agent session (well_known → discover → forec
 
     const wk = await client.callTool({ name: "well_known_capabilities", arguments: {} });
     expect(wk.isError).toBeFalsy();
-    const wkDoc = parseToolText(wk) as Record<string, unknown>;
+    const wkJws = (wk.content as Array<{ text: string }>)[0].text;
+    const wkDoc = decodeJwsPayload(wkJws);
     const inventory = (wkDoc["tool_inventory"] as string[]).sort();
 
     const disc = await client.callTool({
@@ -177,7 +192,7 @@ describe("D9 — complete buyer agent session (well_known → discover → forec
     });
     expect(fc.isError).toBeFalsy();
     const fcBody = parseToolText(fc) as Record<string, unknown>;
-    expect(["Low", "Mid", "High"]).toContain(fcBody["bucket"]);
+    expect(["low", "mid", "high"]).toContain(fcBody["bucket"]);
 
     // The family used for the forecast must have been in the discovery response
     expect(inventory).toContain("get_forecast");
