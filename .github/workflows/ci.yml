@@ -14,3 +14,27 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npx vitest run
+
+  interop-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: npm ci
+      - run: npm run build
+      - name: Start server (HTTP transport, loopback)
+        run: node dist/server.js --http &
+      - name: Wait for server to bind
+        run: |
+          for i in $(seq 1 15); do
+            curl -sf http://127.0.0.1:3900/.well-known/seller-mcp-capabilities > /dev/null && break
+            sleep 1
+          done
+      - name: D9 — Python buyer-agent probe
+        run: python3 sandbox/buyer-agent-probe.py http://127.0.0.1:3900
