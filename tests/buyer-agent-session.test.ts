@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { Server } from "http";
 import type { AddressInfo } from "net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -33,20 +33,24 @@ const KNOWN_FAMILY = "display-ros";
 let httpServer: Server;
 let baseUrl: string;
 let keyPair: KeyPairBundle;
+let rateLimiter: RateLimiter;
+let forecastRateLimiter: RateLimiter;
 
 beforeAll(async () => {
   keyPair = await generateDevKeyPair();
   const denylist = createMemoryDenylist();
   const wellKnown = new WellKnownService(keyPair.privateKey, keyPair.publicKey, TEST_DEPLOYMENT_CONFIG);
+  rateLimiter = new RateLimiter();
+  forecastRateLimiter = new RateLimiter();
   const deps = {
     store: new EntitlementStore(TEST_ENTITLEMENTS_DEMO_CONFIG),
     issuer: new TokenIssuer(keyPair.privateKey),
     validator: new TokenValidator(keyPair.publicKey, denylist),
     wellKnown,
     catalog: new CatalogStore(TEST_CATALOG_CONFIG),
-    rateLimiter: new RateLimiter(),
+    rateLimiter,
     forecastEngine: new ForecastEngine(),
-    forecastRateLimiter: new RateLimiter(),
+    forecastRateLimiter,
     ledger: createMemoryLedger(),
   };
   httpServer = await startHttpServer(
@@ -55,6 +59,12 @@ beforeAll(async () => {
   );
   const { port } = httpServer.address() as AddressInfo;
   baseUrl = `http://127.0.0.1:${port}`;
+});
+
+// Reset rate limiters between tests so each it() starts with a clean quota.
+beforeEach(() => {
+  rateLimiter?.reset();
+  forecastRateLimiter?.reset();
 });
 
 afterAll(() => {
