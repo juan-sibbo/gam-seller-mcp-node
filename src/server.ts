@@ -12,6 +12,7 @@ import { TokenValidator } from "./identity/validator.js";
 import { Denylist, DEV_DENYLIST_PATH } from "./identity/denylist.js";
 import { WellKnownService } from "./discovery/well-known.js";
 import { CatalogStore, loadCatalogFromFile } from "./catalog/store.js";
+import { PricingStore, loadPricingFromFile } from "./pricing/store.js";
 import { RateLimiter } from "./rate-limiter/limiter.js";
 import { ForecastEngine } from "./forecast/engine.js";
 import { loadDeploymentConfigFromFile } from "./config/deployment.js";
@@ -31,6 +32,7 @@ interface ServerDeps {
   validator: TokenValidator;
   wellKnown: WellKnownService;
   catalog: CatalogStore;
+  pricingStore: PricingStore;
   rateLimiter: RateLimiter;
   forecastEngine: ForecastEngine;
   forecastRateLimiter: RateLimiter;
@@ -39,7 +41,7 @@ interface ServerDeps {
 }
 
 function buildServer(deps: ServerDeps): McpServer {
-  const { store, validator, wellKnown, catalog, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard } = deps;
+  const { store, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard } = deps;
   const policy = new PolicyEngine(store);
 
   const server = new McpServer({
@@ -162,7 +164,17 @@ function buildServer(deps: ServerDeps): McpServer {
 
       // Synthetic catalog from config — zero GAM (S4).
       // consent_context and legal_basis_provenance are Pilar 3 reserved fields (null in v1).
-      const families = catalog.discover(buyer_id);
+      // SEC-GATE-13 bisturí: attach firm list price when available. Only the uniform list price
+      // is exposed — per-buyer pricing would collapse into commercial intelligence and must not
+      // land here without reopening SEC-GATE-13 (DP-AB-01 §3/§5.1, authorized 07/07/26).
+      const families = catalog.discover(buyer_id).map((f) => {
+        const price = pricingStore.priceFor(f.family_id);
+        if (!price) return f;
+        return {
+          ...f,
+          pricing_options: { list_price: price.list_price, currency: price.currency, valid_until: price.valid_until },
+        };
+      });
       return { content: [{ type: "text", text: JSON.stringify({ families, request_id }) }] };
     }
   );
@@ -249,6 +261,8 @@ async function main() {
   // prevent startup — loadEntitlementsFromFile throws before anything serves.
   const store = new EntitlementStore(loadEntitlementsFromFile());
   const catalog = loadCatalogFromFile();
+  // Fail-closed: loadPricingFromFile throws on missing/unparseable valid_until (D7).
+  const pricingStore = loadPricingFromFile();
   const rateLimiter = new RateLimiter();
   const forecastEngine = new ForecastEngine();
   const forecastRateLimiter = new RateLimiter();
@@ -261,7 +275,7 @@ async function main() {
   anchorHead(ledger, anchor); // anchor whatever survived the previous run
   setInterval(() => anchorHead(ledger, anchor), ANCHOR_INTERVAL_MS).unref();
 
-  const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard };
+  const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard };
 
   // Fase A: --http serves StreamableHTTP on 127.0.0.1 (external bind = infra act, #8/#10).
   // Default remains stdio for MCP-host usage.
