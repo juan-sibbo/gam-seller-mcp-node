@@ -12,6 +12,7 @@ import { createMemoryDenylist } from "../src/identity/denylist.js";
 import { WellKnownService } from "../src/discovery/well-known.js";
 import { TEST_DEPLOYMENT_CONFIG } from "../src/config/deployment.js";
 import { CatalogStore, TEST_CATALOG_CONFIG } from "../src/catalog/store.js";
+import { PricingStore, TEST_PRICING_CONFIG } from "../src/pricing/store.js";
 import { ForecastEngine } from "../src/forecast/engine.js";
 import { EntitlementStore, TEST_ENTITLEMENTS_DEMO_CONFIG } from "../src/policy/entitlements.js";
 import { RateLimiter } from "../src/rate-limiter/limiter.js";
@@ -48,6 +49,7 @@ beforeAll(async () => {
     validator: new TokenValidator(keyPair.publicKey, denylist),
     wellKnown,
     catalog: new CatalogStore(TEST_CATALOG_CONFIG),
+    pricingStore: new PricingStore(TEST_PRICING_CONFIG),
     rateLimiter,
     forecastEngine: new ForecastEngine(),
     forecastRateLimiter,
@@ -144,11 +146,24 @@ describe("D9 — complete buyer agent session (well_known → discover → forec
     for (const f of families) {
       expect(typeof f["family_id"]).toBe("string");
       expect(typeof f["label"]).toBe("string");
-      // Internal IDs, pricing, and deal data must NOT appear
+      // Internal IDs and raw price fields must NOT appear (F0-WO-06 + SEC-GATE-13)
       expect(f["internal_id"]).toBeUndefined();
       expect(f["deal_id"]).toBeUndefined();
       expect(f["price"]).toBeUndefined();
+      // pricing_options is the SEC-GATE-13 bisturí surface (list price only, uniform across buyers)
+      const po = f["pricing_options"] as Record<string, unknown> | undefined;
+      if (po !== undefined) {
+        expect(typeof po["list_price"]).toBe("number");
+        expect((po["list_price"] as number)).toBeGreaterThan(0);
+        expect(typeof po["currency"]).toBe("string");
+        expect(typeof po["valid_until"]).toBe("string");
+        // per-buyer breakdown must not appear in the pricing surface
+        expect(po["buyer_id"]).toBeUndefined();
+        expect(po["discount"]).toBeUndefined();
+      }
     }
+    // pilot-buyer-001 has access to display-ros and branded-content, both priced in TEST_PRICING_CONFIG
+    expect(families.every((f) => f["pricing_options"] !== undefined)).toBe(true);
 
     await client.close();
   });

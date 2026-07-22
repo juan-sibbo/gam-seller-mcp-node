@@ -9,6 +9,7 @@ import { createMemoryDenylist, Denylist } from "../src/identity/denylist.js";
 import { WellKnownService } from "../src/discovery/well-known.js";
 import { TEST_DEPLOYMENT_CONFIG } from "../src/config/deployment.js";
 import { CatalogStore, TEST_CATALOG_CONFIG } from "../src/catalog/store.js";
+import { PricingStore, TEST_PRICING_CONFIG } from "../src/pricing/store.js";
 import { ForecastEngine } from "../src/forecast/engine.js";
 import { EntitlementStore, TEST_ENTITLEMENTS_DEMO_CONFIG } from "../src/policy/entitlements.js";
 import { RateLimiter } from "../src/rate-limiter/limiter.js";
@@ -46,6 +47,7 @@ async function setupServer(): Promise<TestContext> {
     validator,
     wellKnown,
     catalog: new CatalogStore(TEST_CATALOG_CONFIG),
+    pricingStore: new PricingStore(TEST_PRICING_CONFIG),
     rateLimiter: new RateLimiter(),
     forecastEngine: new ForecastEngine(),
     forecastRateLimiter: new RateLimiter(),

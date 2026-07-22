@@ -16,6 +16,7 @@ import { createMemoryDenylist } from "../src/identity/denylist.js";
 import { WellKnownService, WELL_KNOWN_PATH, WELL_KNOWN_CACHE_TTL_SECONDS } from "../src/discovery/well-known.js";
 import { TEST_DEPLOYMENT_CONFIG } from "../src/config/deployment.js";
 import { CatalogStore, TEST_CATALOG_CONFIG } from "../src/catalog/store.js";
+import { PricingStore, TEST_PRICING_CONFIG } from "../src/pricing/store.js";
 import { ForecastEngine } from "../src/forecast/engine.js";
 import { EntitlementStore, TEST_ENTITLEMENTS_DEMO_CONFIG } from "../src/policy/entitlements.js";
 import { RateLimiter } from "../src/rate-limiter/limiter.js";
@@ -91,6 +92,7 @@ describe("HTTP transport — E-12 canonical route + MCP endpoint", () => {
       validator: new TokenValidator(keyPair.publicKey, denylist),
       wellKnown,
       catalog: new CatalogStore(TEST_CATALOG_CONFIG),
+      pricingStore: new PricingStore(TEST_PRICING_CONFIG),
       rateLimiter: new RateLimiter(),
       forecastEngine: new ForecastEngine(),
       forecastRateLimiter: new RateLimiter(),
