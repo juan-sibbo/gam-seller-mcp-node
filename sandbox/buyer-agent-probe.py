@@ -242,6 +242,11 @@ def run_probe(base_url: str) -> None:
                         ok(f"doc.node_id present ({doc['node_id']!r})")
                     else:
                         fail("doc.node_id", "missing")
+                    cap_families = doc.get("capability_families", [])
+                    if cap_families:
+                        ok(f"capability_families = {cap_families!r}")
+                    else:
+                        fail("capability_families", "empty or missing")
                     posture = doc.get("privacy_posture", {})
                     if posture.get("end_user_personal_data") == "none":
                         ok("privacy_posture.end_user_personal_data = 'none' (Z3 ✓)")

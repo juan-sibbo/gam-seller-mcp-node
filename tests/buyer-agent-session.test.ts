@@ -98,18 +98,19 @@ describe("D9 — complete buyer agent session (well_known → discover → forec
     expect(jws.split(".")).toHaveLength(3); // must be a valid JWS compact
     const doc = decodeJwsPayload(jws);
 
-    // Trust anchor structure (E-12)
+    // Trust anchor structure (E-12 / WellKnownDocument)
     expect(typeof doc["node_id"]).toBe("string");
     expect((doc["node_id"] as string).length).toBeGreaterThan(0);
 
-    // Tool inventory advertised must match the actual tools
-    const inventory = doc["tool_inventory"] as string[];
-    expect(Array.isArray(inventory)).toBe(true);
-    expect(inventory.sort()).toEqual(["discover_products", "get_forecast", "well_known_capabilities"]);
+    // capability_families advertised must be a non-empty string array
+    const families = doc["capability_families"] as string[];
+    expect(Array.isArray(families)).toBe(true);
+    expect(families.length).toBeGreaterThan(0);
 
-    // Privacy posture (Z3 — audience-blind)
+    // Privacy posture (Z3 — audience-blind, PATH A)
     const posture = doc["privacy_posture"] as Record<string, unknown>;
     expect(posture["end_user_personal_data"]).toBe("none");
+    expect(posture["audience_segmentation"]).toBe("not_offered_v1");
 
     await client.close();
   });
@@ -175,7 +176,7 @@ describe("D9 — complete buyer agent session (well_known → discover → forec
     expect(wk.isError).toBeFalsy();
     const wkJws = (wk.content as Array<{ text: string }>)[0].text;
     const wkDoc = decodeJwsPayload(wkJws);
-    const inventory = (wkDoc["tool_inventory"] as string[]).sort();
+    const families = (wkDoc["capability_families"] as string[]) ?? [];
 
     const disc = await client.callTool({
       name: "discover_products",
@@ -194,8 +195,8 @@ describe("D9 — complete buyer agent session (well_known → discover → forec
     const fcBody = parseToolText(fc) as Record<string, unknown>;
     expect(["low", "mid", "high"]).toContain(fcBody["bucket"]);
 
-    // The family used for the forecast must have been in the discovery response
-    expect(inventory).toContain("get_forecast");
+    // capability_families from the trust anchor must be a non-empty list
+    expect(families.length).toBeGreaterThan(0);
 
     await client.close();
   });
