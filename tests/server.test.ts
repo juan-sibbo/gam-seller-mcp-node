@@ -194,6 +194,49 @@ describe("server integration — discover_products", () => {
     });
     expect(second.isError).toBeFalsy();
   });
+
+  it("SEC-GATE-13: pricing_options absent when all prices are expired (fail-closed)", async () => {
+    // Build a server where every configured price has already expired.
+    // Verifies that the fail-closed expiry in PricingStore propagates all the way
+    // through the discover_products response — not just at the unit level.
+    const kp = await generateDevKeyPair();
+    const expiredPricingStore = new PricingStore({
+      prices: [
+        { family_id: "display-ros",    currency: "EUR", list_price: 4.5,  valid_until: "2020-01-01T00:00:00Z" },
+        { family_id: "branded-content", currency: "EUR", list_price: 45.0, valid_until: "2020-01-01T00:00:00Z" },
+        { family_id: "video-pre-roll",  currency: "EUR", list_price: 18.0, valid_until: "2020-01-01T00:00:00Z" },
+      ],
+    });
+    const server = buildServer({
+      store: new EntitlementStore(TEST_ENTITLEMENTS_DEMO_CONFIG),
+      issuer: new TokenIssuer(kp.privateKey),
+      validator: new TokenValidator(kp.publicKey, createMemoryDenylist()),
+      wellKnown: new WellKnownService(kp.privateKey, kp.publicKey, TEST_DEPLOYMENT_CONFIG),
+      catalog: new CatalogStore(TEST_CATALOG_CONFIG),
+      pricingStore: expiredPricingStore,
+      rateLimiter: new RateLimiter(),
+      forecastEngine: new ForecastEngine(),
+      forecastRateLimiter: new RateLimiter(),
+      ledger: createMemoryLedger(),
+      replayGuard: new ReplayGuard(),
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-expired-pricing", version: "0.0.1" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    const result = await client.callTool({
+      name: "discover_products",
+      arguments: { buyer_id: ENTITLED_BUYER },
+    });
+    expect(result.isError).toBeFalsy();
+    const body = JSON.parse(firstText(result));
+    const families = body.families as Array<Record<string, unknown>>;
+    expect(families.length).toBeGreaterThan(0);
+    // No family may carry pricing_options when every configured price is expired
+    for (const f of families) {
+      expect(f["pricing_options"]).toBeUndefined();
+    }
+  });
 });
 
 describe("server integration — get_forecast", () => {
