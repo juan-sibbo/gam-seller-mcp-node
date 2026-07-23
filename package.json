@@ -4,8 +4,28 @@
   "type": "module",
   "license": "MIT",
   "description": "Governed, read-only MCP server exposing Google Ad Manager inventory discovery to buyer agents",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "google-ad-manager",
+    "adtech",
+    "programmatic-advertising",
+    "ai-agent",
+    "typescript",
+    "gdpr",
+    "privacy",
+    "openrtb"
+  ],
+  "homepage": "https://github.com/juan-sibbo/gam-seller-mcp-node#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/juan-sibbo/gam-seller-mcp-node.git"
+  },
+  "bugs": {
+    "url": "https://github.com/juan-sibbo/gam-seller-mcp-node/issues"
+  },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "scripts": {
     "build": "tsc",
