@@ -25,7 +25,7 @@ export const METRICS_PATH = "/metrics";
 // can still arrive from elsewhere if the operator binds externally (infra act #8/#10);
 // the metrics surface must never be reachable off-host. Accept IPv4 loopback, IPv6
 // loopback, and the IPv4-mapped-IPv6 form Node reports on dual-stack sockets.
-function isLoopback(remoteAddress: string): boolean {
+export function isLoopback(remoteAddress: string): boolean {
   return (
     remoteAddress === "127.0.0.1" ||
     remoteAddress === "::1" ||
