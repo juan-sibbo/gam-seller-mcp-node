@@ -22,6 +22,7 @@ import { PseudonymService, DEV_PSEUDONYM_KEYS_PATH } from "./audit/pseudonym.js"
 import { HeadHashAnchor, DEV_ANCHOR_PATH, ANCHOR_INTERVAL_MS } from "./audit/anchor.js";
 import { EventClass } from "./audit/event.js";
 import { startHttpServer, httpOptionsFromEnv } from "./http.js";
+import { MetricsRegistry, MetricTool, ToolOutcome, AuthFailReason } from "./metrics/registry.js";
 import { randomUUID } from "crypto";
 
 const CONTRACT_VERSION = "0.1.0";
@@ -38,11 +39,22 @@ interface ServerDeps {
   forecastRateLimiter: RateLimiter;
   ledger: AuditLedger;
   replayGuard: ReplayGuard;
+  // Optional operator metrics. When absent, every handler runs unchanged and no
+  // series are recorded — observability is additive, never on the request's critical path.
+  metricsRegistry?: MetricsRegistry;
 }
 
 function buildServer(deps: ServerDeps): McpServer {
-  const { store, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard } = deps;
+  const { store, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, metricsRegistry } = deps;
   const policy = new PolicyEngine(store);
+
+  // Record a handler's terminal outcome: the labelled call counter plus the current
+  // ledger size (which reflects any audit appends this request made). No buyer_id
+  // ever reaches these labels — see the MetricsRegistry security invariant.
+  function recordOutcome(tool: MetricTool, outcome: ToolOutcome): void {
+    metricsRegistry?.increment("mcp_tool_calls_total", { tool, outcome });
+    metricsRegistry?.set("mcp_audit_ledger_entries_total", ledger.size());
+  }
 
   const server = new McpServer({
     name: "gam-seller-mcp-node",
@@ -123,6 +135,8 @@ function buildServer(deps: ServerDeps): McpServer {
     {},
     async () => {
       const signedDoc = await wellKnown.sign();
+      // Public, unguarded surface — the only terminal outcome is success.
+      recordOutcome(MetricTool.WELL_KNOWN_CAPABILITIES, ToolOutcome.SUCCESS);
       return { content: [{ type: "text", text: signedDoc }] };
     }
   );
@@ -144,21 +158,31 @@ function buildServer(deps: ServerDeps): McpServer {
       // reaches token validation. No client_request_id → no dedupe (back-compat).
       if (client_request_id !== undefined) {
         if (replayGuard.isReplay(client_request_id)) {
+          metricsRegistry?.increment("mcp_replay_rejected_total", { tool: MetricTool.DISCOVER_PRODUCTS });
+          recordOutcome(MetricTool.DISCOVER_PRODUCTS, ToolOutcome.REPLAY_REJECTED);
           return replayResult(request_id);
         }
         replayGuard.record(client_request_id);
       }
 
+      // authenticate() returns false only when a token is present and invalid — so a
+      // failure here is specifically a bad/revoked token, not a policy denial.
       if (!(await authenticate(token, buyer_id, AllowedSurface.PRODUCT_DISCOVERY, request_id))) {
+        metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.DISCOVER_PRODUCTS, reason: AuthFailReason.TOKEN_INVALID });
+        recordOutcome(MetricTool.DISCOVER_PRODUCTS, ToolOutcome.AUTH_FAILED);
         return authFailedResult(request_id);
       }
 
       if (!resolveScope(buyer_id, AllowedSurface.PRODUCT_DISCOVERY, request_id)) {
+        metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.DISCOVER_PRODUCTS, reason: AuthFailReason.SCOPE_DENIED });
+        recordOutcome(MetricTool.DISCOVER_PRODUCTS, ToolOutcome.AUTH_FAILED);
         return authFailedResult(request_id);
       }
 
       // Rate limit check — N=1/T=30s per buyer_id (blocker-#6 §4 RATIFIED).
       if (!rateLimiter.check(buyer_id)) {
+        metricsRegistry?.increment("mcp_rate_limited_total", { tool: MetricTool.DISCOVER_PRODUCTS });
+        recordOutcome(MetricTool.DISCOVER_PRODUCTS, ToolOutcome.RATE_LIMITED);
         return rateLimitedResult(request_id);
       }
 
@@ -175,6 +199,7 @@ function buildServer(deps: ServerDeps): McpServer {
           pricing_options: { list_price: price.list_price, currency: price.currency, valid_until: price.valid_until },
         };
       });
+      recordOutcome(MetricTool.DISCOVER_PRODUCTS, ToolOutcome.SUCCESS);
       return { content: [{ type: "text", text: JSON.stringify({ families, request_id }) }] };
     }
   );
@@ -199,21 +224,29 @@ function buildServer(deps: ServerDeps): McpServer {
       // reaches token validation. No client_request_id → no dedupe (back-compat).
       if (client_request_id !== undefined) {
         if (replayGuard.isReplay(client_request_id)) {
+          metricsRegistry?.increment("mcp_replay_rejected_total", { tool: MetricTool.GET_FORECAST });
+          recordOutcome(MetricTool.GET_FORECAST, ToolOutcome.REPLAY_REJECTED);
           return replayResult(request_id);
         }
         replayGuard.record(client_request_id);
       }
 
       if (!(await authenticate(token, buyer_id, AllowedSurface.FORECAST, request_id))) {
+        metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.GET_FORECAST, reason: AuthFailReason.TOKEN_INVALID });
+        recordOutcome(MetricTool.GET_FORECAST, ToolOutcome.AUTH_FAILED);
         return authFailedResult(request_id);
       }
 
       if (!resolveScope(buyer_id, AllowedSurface.FORECAST, request_id)) {
+        metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.GET_FORECAST, reason: AuthFailReason.SCOPE_DENIED });
+        recordOutcome(MetricTool.GET_FORECAST, ToolOutcome.AUTH_FAILED);
         return authFailedResult(request_id);
       }
 
       // Separate rate limiter for forecast — N=1/T=30s (blocker-#6 §4 RATIFIED).
       if (!forecastRateLimiter.check(buyer_id)) {
+        metricsRegistry?.increment("mcp_rate_limited_total", { tool: MetricTool.GET_FORECAST });
+        recordOutcome(MetricTool.GET_FORECAST, ToolOutcome.RATE_LIMITED);
         return rateLimitedResult(request_id);
       }
 
@@ -225,6 +258,7 @@ function buildServer(deps: ServerDeps): McpServer {
         { family_id, period, bucket: result.bucket, synthetic: true },
         { buyer_id, request_id }
       );
+      recordOutcome(MetricTool.GET_FORECAST, ToolOutcome.SUCCESS);
       return { content: [{ type: "text", text: JSON.stringify({ ...result, request_id }) }] };
     }
   );
@@ -267,6 +301,9 @@ async function main() {
   const forecastEngine = new ForecastEngine();
   const forecastRateLimiter = new RateLimiter();
   const replayGuard = new ReplayGuard();
+  // Shared metrics registry — the same instance backs both the tool handlers and the
+  // /metrics HTTP route, so counters recorded in-handler are visible at scrape time.
+  const metricsRegistry = new MetricsRegistry();
 
   // Audit chain: pseudonymized ledger + external head-hash anchoring (S3, wired S7).
   const pseudonyms = new PseudonymService(DEV_PSEUDONYM_KEYS_PATH);
@@ -275,13 +312,13 @@ async function main() {
   anchorHead(ledger, anchor); // anchor whatever survived the previous run
   setInterval(() => anchorHead(ledger, anchor), ANCHOR_INTERVAL_MS).unref();
 
-  const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard };
+  const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, metricsRegistry };
 
   // Fase A: --http serves StreamableHTTP on 127.0.0.1 (external bind = infra act, #8/#10).
   // Default remains stdio for MCP-host usage.
   if (process.argv.includes("--http")) {
     const opts = httpOptionsFromEnv();
-    await startHttpServer({ makeServer: () => buildServer(deps), wellKnown }, opts);
+    await startHttpServer({ makeServer: () => buildServer(deps), wellKnown, metricsRegistry }, opts);
     process.stderr.write(
       `GAM Seller MCP Node started on http://${opts.host}:${opts.port} (MCP at /mcp, well-known at canonical route; dev context, read-only MVP)\n`
     );

@@ -5,6 +5,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { WellKnownService } from "./discovery/well-known.js";
 import { WELL_KNOWN_PATH, WELL_KNOWN_CACHE_TTL_SECONDS } from "./discovery/well-known.js";
+import type { MetricsRegistry } from "./metrics/registry.js";
 
 // HTTP transport — Fase A (stdio → StreamableHTTP).
 // Two surfaces only:
@@ -18,6 +19,19 @@ import { WELL_KNOWN_PATH, WELL_KNOWN_CACHE_TTL_SECONDS } from "./discovery/well-
 // infra act gated by blockers #8/#10 — the operator must set MCP_HTTP_HOST explicitly.
 
 export const MCP_PATH = "/mcp";
+export const METRICS_PATH = "/metrics";
+
+// Loopback-only exposure for /metrics. The default bind is 127.0.0.1, but a request
+// can still arrive from elsewhere if the operator binds externally (infra act #8/#10);
+// the metrics surface must never be reachable off-host. Accept IPv4 loopback, IPv6
+// loopback, and the IPv4-mapped-IPv6 form Node reports on dual-stack sockets.
+function isLoopback(remoteAddress: string): boolean {
+  return (
+    remoteAddress === "127.0.0.1" ||
+    remoteAddress === "::1" ||
+    remoteAddress === "::ffff:127.0.0.1"
+  );
+}
 
 export interface HttpOptions {
   host: string;
@@ -37,6 +51,9 @@ interface HttpDeps {
   // One McpServer per MCP session — buildServer is cheap and sessions stay isolated.
   makeServer: () => McpServer;
   wellKnown: WellKnownService;
+  // Optional operator-facing metrics. When absent, /metrics does not exist (404) —
+  // a deployment opts in by injecting the shared registry (same instance buildServer holds).
+  metricsRegistry?: MetricsRegistry;
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
@@ -69,6 +86,26 @@ export async function startHttpServer(deps: HttpDeps, opts: HttpOptions): Promis
           "Cache-Control": `public, max-age=${WELL_KNOWN_CACHE_TTL_SECONDS}`,
         });
         res.end(signedDoc);
+        return;
+      }
+
+      // Operator metrics — Prometheus scrape target. Loopback-only, no auth (the host
+      // boundary IS the authorization boundary), never cached. When no registry is
+      // injected the route does not exist at all (404), indistinguishable from any
+      // other unknown path — the feature is off by omission.
+      if (url.pathname === METRICS_PATH && req.method === "GET") {
+        if (!deps.metricsRegistry) {
+          res.writeHead(404).end();
+          return;
+        }
+        if (!isLoopback(req.socket.remoteAddress ?? "")) {
+          // Empty body — do not confirm the route exists to an off-host caller.
+          res.writeHead(403).end();
+          return;
+        }
+        deps.metricsRegistry.set("mcp_active_sessions", sessions.size);
+        res.writeHead(200, { "Content-Type": "text/plain; version=0.0.4; charset=utf-8" });
+        res.end(deps.metricsRegistry.render());
         return;
       }
 
