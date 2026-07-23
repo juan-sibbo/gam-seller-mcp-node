@@ -6,15 +6,26 @@
   "description": "Governed, read-only MCP server exposing Google Ad Manager inventory discovery to buyer agents",
   "keywords": [
     "mcp",
+    "mcp-server",
     "model-context-protocol",
     "google-ad-manager",
+    "gam",
     "adtech",
     "programmatic-advertising",
+    "agentic-advertising",
+    "agentic-ai",
     "ai-agent",
+    "llm",
+    "seller",
+    "sell-side",
+    "publisher",
+    "ad-inventory",
+    "inventory",
     "typescript",
     "gdpr",
     "privacy",
-    "openrtb"
+    "publicidad-agentica",
+    "publicidad-programatica"
   ],
   "homepage": "https://github.com/juan-sibbo/gam-seller-mcp-node#readme",
   "repository": {
