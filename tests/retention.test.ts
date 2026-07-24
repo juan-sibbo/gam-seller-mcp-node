@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createMemoryLedger } from "../src/audit/ledger.js";
 import { createMemoryAnchor, verifyAfterRestore } from "../src/audit/anchor.js";
-import { RetentionService, DAY_MS, RETENTION_MONTH_MS } from "../src/audit/retention.js";
+import { RetentionService, DAY_MS, RETENTION_MONTH_MS, runRetentionCycle } from "../src/audit/retention.js";
 import { EventClass } from "../src/audit/event.js";
 
 // S6 F3 — retention SIGNED A3: 90d hot / 12m archive / anchors indefinite
@@ -178,5 +178,60 @@ describe("RetentionService — purge (archive → anonymous aggregate)", () => {
     const late = T0 + 91 * DAY_MS + 13 * RETENTION_MONTH_MS;
     expect(retention.purge(late)).toBe(1);
     expect(retention.purge(late)).toBe(0);
+  });
+});
+
+describe("runRetentionCycle — scheduled enforcement (A3 automatic)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("rotates aged hot entries in a single pass", () => {
+    const ledger = createMemoryLedger();
+    const retention = new RetentionService(RETENTION, createMemoryAnchor());
+
+    vi.setSystemTime(T0);
+    ledger.append(EventClass.BUYER_AUTHENTICATION, {}, { buyer_id: "b1" });
+    ledger.append(EventClass.SCOPE_RESOLUTION, {}, { buyer_id: "b1" });
+
+    const { rotated, purged } = runRetentionCycle(retention, ledger, T0 + 100 * DAY_MS);
+
+    expect(rotated).not.toBeNull();
+    expect(rotated!.entry_count).toBe(2);
+    expect(purged).toBe(0); // nothing archived long enough to purge yet
+  });
+
+  it("purges archive segments past archive_months on a later cycle", () => {
+    const ledger = createMemoryLedger();
+    const retention = new RetentionService(RETENTION, createMemoryAnchor());
+
+    vi.setSystemTime(T0);
+    ledger.append(EventClass.BUYER_AUTHENTICATION, {}, { buyer_id: "b1" });
+
+    // First cycle archives the aged entry; second cycle, 13 months later, purges it.
+    runRetentionCycle(retention, ledger, T0 + 100 * DAY_MS);
+    const purgeTime = T0 + 100 * DAY_MS + 13 * RETENTION_MONTH_MS;
+    const { purged } = runRetentionCycle(retention, ledger, purgeTime);
+
+    expect(purged).toBe(1);
+    expect(retention.allSegments()[0].entries).toBeNull(); // payload gone, head_hash kept
+  });
+
+  it("is a safe no-op on a fresh ledger with nothing aged", () => {
+    const ledger = createMemoryLedger();
+    const retention = new RetentionService(RETENTION, createMemoryAnchor());
+
+    vi.setSystemTime(T0);
+    ledger.append(EventClass.BUYER_AUTHENTICATION, {}, { buyer_id: "b1" });
+
+    const { rotated, purged } = runRetentionCycle(retention, ledger, T0 + DAY_MS);
+
+    expect(rotated).toBeNull();
+    expect(purged).toBe(0);
+    expect(ledger.size()).toBe(1);
   });
 });
