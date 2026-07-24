@@ -20,6 +20,7 @@ import { AuditLedger, DEV_LEDGER_PATH } from "./audit/ledger.js";
 import { ReplayGuard } from "./audit/replay.js";
 import { PseudonymService, DEV_PSEUDONYM_KEYS_PATH } from "./audit/pseudonym.js";
 import { HeadHashAnchor, DEV_ANCHOR_PATH, ANCHOR_INTERVAL_MS } from "./audit/anchor.js";
+import { RetentionService, DEV_ARCHIVE_PATH, runRetentionCycle, RETENTION_INTERVAL_MS } from "./audit/retention.js";
 import { EventClass } from "./audit/event.js";
 import { startHttpServer, httpOptionsFromEnv } from "./http.js";
 import { MetricsRegistry, MetricTool, ToolOutcome, AuthFailReason } from "./metrics/registry.js";
@@ -311,6 +312,14 @@ async function main() {
   const anchor = new HeadHashAnchor(DEV_ANCHOR_PATH);
   anchorHead(ledger, anchor); // anchor whatever survived the previous run
   setInterval(() => anchorHead(ledger, anchor), ANCHOR_INTERVAL_MS).unref();
+
+  // Enforce ledger retention automatically (A3 SIGNED: 90d hot → 12m archive → purge).
+  // Without this scheduled cycle, rotate()/purge() never run and the "automatic" purge
+  // would be dead code — the ledger would grow unbounded, breaking storage limitation
+  // (GDPR Art. 5(1)(e)). Runs once at startup to catch up on downtime, then on a timer.
+  const retention = new RetentionService(deployment.retention, anchor, DEV_ARCHIVE_PATH);
+  runRetentionCycle(retention, ledger);
+  setInterval(() => runRetentionCycle(retention, ledger), RETENTION_INTERVAL_MS).unref();
 
   const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, metricsRegistry };
 
