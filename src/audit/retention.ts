@@ -128,3 +128,22 @@ export class RetentionService {
 }
 
 export const DEV_ARCHIVE_PATH = "./data/ledger-archive.json";
+
+// Enforce the full retention policy in one pass: rotate aged hot entries into an
+// anchored archive segment, then purge archive segments past archive_months. This
+// is what makes A3's "automatic purge at 12 months" actually automatic — main()
+// schedules it. Without a scheduled caller, rotate()/purge() are dead code and the
+// SIGNED retention act is not enforced at runtime.
+export function runRetentionCycle(
+  retention: RetentionService,
+  ledger: AuditLedger,
+  nowMs = Date.now()
+): { rotated: ArchivedSegment | null; purged: number } {
+  const rotated = retention.rotate(ledger, nowMs);
+  const purged = retention.purge(nowMs);
+  return { rotated, purged };
+}
+
+// Cadence for the scheduled retention cycle. Retention resolution is days/months,
+// so a sub-daily tick is prompt enough without cost. Named to avoid a magic number.
+export const RETENTION_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
