@@ -4,6 +4,8 @@
 // Z3 invariant: response contains no user-level attributes (audience, segment, TC String).
 // Rate limit: N=1/T=30s per buyer_id applied in server.ts (same class as discover_products).
 
+import type { ForecastSource } from "./source.js";
+
 // Bucket values — s5-forecast-demo-mode-authorization §bucket-ranges (placeholder for demo).
 // Production ranges are [[por definir]] pending pilot publisher inventory data (blocker #6).
 export const FORECAST_BUCKET = {
@@ -34,11 +36,35 @@ export interface ForecastResult {
   legal_basis_provenance: null; // Pilar 3 reserved field
 }
 
-export class ForecastEngine {
+// Default source: deterministic synthetic buckets, zero GAM. The bucket algorithm used to
+// live inside ForecastEngine; it is extracted here so the engine depends on the ForecastSource
+// seam (source.ts) instead of a hardwired formula. Swapping in a real (GAM) source is a
+// constructor injection once the gate + service account land — the engine body does not change.
+export class SyntheticForecastSource implements ForecastSource {
   // Deterministic bucket assignment from family_id + period.
   // Same input always produces the same bucket — demo is reproducible across runs.
-  forecast(family_id: string, period: string): ForecastResult {
-    const bucket = this.assignBucket(family_id, period);
+  async getAvailsBucket(family_id: string, period: string): Promise<ForecastBucket> {
+    const seed = family_id + period;
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) {
+      hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+    }
+    const buckets: ForecastBucket[] = [FORECAST_BUCKET.LOW, FORECAST_BUCKET.MID, FORECAST_BUCKET.HIGH];
+    return buckets[hash % 3]!;
+  }
+}
+
+export class ForecastEngine {
+  // Source-agnostic. Defaults to the synthetic source so existing callers and the demo keep
+  // working unchanged. A production (GAM) source is injected only behind a future gate + a
+  // provisioned service account (CURRENT_STATE §"Still Prohibited": no GAM connection in v1);
+  // the GamForecastSource stub throws, so the synthetic: true invariant below stays honest —
+  // no real source can currently produce a result. Flipping synthetic → false is a future
+  // production-gate act, out of scope here.
+  constructor(private readonly source: ForecastSource = new SyntheticForecastSource()) {}
+
+  async forecast(family_id: string, period: string): Promise<ForecastResult> {
+    const bucket = await this.source.getAvailsBucket(family_id, period);
     return {
       family_id,
       period,
@@ -49,15 +75,5 @@ export class ForecastEngine {
       consent_context: null,
       legal_basis_provenance: null,
     };
-  }
-
-  private assignBucket(family_id: string, period: string): ForecastBucket {
-    const seed = family_id + period;
-    let hash = 0;
-    for (let i = 0; i < seed.length; i++) {
-      hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
-    }
-    const buckets: ForecastBucket[] = [FORECAST_BUCKET.LOW, FORECAST_BUCKET.MID, FORECAST_BUCKET.HIGH];
-    return buckets[hash % 3];
   }
 }

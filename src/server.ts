@@ -251,7 +251,7 @@ function buildServer(deps: ServerDeps): McpServer {
         return rateLimitedResult(request_id);
       }
 
-      const result = forecastEngine.forecast(family_id, period);
+      const result = await forecastEngine.forecast(family_id, period);
       // FORECAST_REQUEST payload is minimized: bucket + coarse identifiers only
       // (no raw avails — KANON §Logs-y-Audit).
       ledger.append(

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
-import { ForecastEngine, FORECAST_TTL_SECONDS, FORECAST_BUCKET, BUCKET_LABELS } from "../src/forecast/engine.js";
+import { ForecastEngine, SyntheticForecastSource, FORECAST_TTL_SECONDS, FORECAST_BUCKET, BUCKET_LABELS } from "../src/forecast/engine.js";
+import { GamForecastSource, type ForecastSource } from "../src/forecast/source.js";
 import { RateLimiter, RATE_LIMIT_WINDOW_MS } from "../src/rate-limiter/limiter.js";
 import { PolicyEngine } from "../src/policy/engine.js";
 import { EntitlementStore, TEST_ENTITLEMENTS_DEMO_CONFIG } from "../src/policy/entitlements.js";
@@ -23,8 +24,8 @@ describe("ForecastEngine — synthetic demo forecast (S5)", () => {
     engine = new ForecastEngine();
   });
 
-  it("returns a valid forecast result for a known family + period", () => {
-    const result = engine.forecast("display-ros", "Q4-2026");
+  it("returns a valid forecast result for a known family + period", async () => {
+    const result = await engine.forecast("display-ros", "Q4-2026");
     expect(result.family_id).toBe("display-ros");
     expect(result.period).toBe("Q4-2026");
     expect(Object.values(FORECAST_BUCKET)).toContain(result.bucket);
@@ -32,24 +33,24 @@ describe("ForecastEngine — synthetic demo forecast (S5)", () => {
     expect(result.ttl_seconds).toBe(FORECAST_TTL_SECONDS);
   });
 
-  it("synthetic flag is always true (demo mode authorization)", () => {
-    const result = engine.forecast("display-ros", "Q4-2026");
+  it("synthetic flag is always true (demo mode authorization)", async () => {
+    const result = await engine.forecast("display-ros", "Q4-2026");
     expect(result.synthetic).toBe(true);
   });
 
-  it("TTL is 1800 seconds (30 min, blocker-#6 §4 RATIFIED)", () => {
+  it("TTL is 1800 seconds (30 min, blocker-#6 §4 RATIFIED)", async () => {
     expect(FORECAST_TTL_SECONDS).toBe(1800);
-    const result = engine.forecast("video-pre-roll", "Q1-2027");
+    const result = await engine.forecast("video-pre-roll", "Q1-2027");
     expect(result.ttl_seconds).toBe(1800);
   });
 
-  it("bucket is deterministic — same input always produces same bucket", () => {
-    const r1 = engine.forecast("branded-content", "Q3-2026");
-    const r2 = engine.forecast("branded-content", "Q3-2026");
+  it("bucket is deterministic — same input always produces same bucket", async () => {
+    const r1 = await engine.forecast("branded-content", "Q3-2026");
+    const r2 = await engine.forecast("branded-content", "Q3-2026");
     expect(r1.bucket).toBe(r2.bucket);
   });
 
-  it("different family+period combinations produce all three bucket values", () => {
+  it("different family+period combinations produce all three bucket values", async () => {
     const inputs = [
       ["display-ros", "Q1-2026"],
       ["video-pre-roll", "Q2-2026"],
@@ -58,12 +59,14 @@ describe("ForecastEngine — synthetic demo forecast (S5)", () => {
       ["display-ros", "Q4-2026"],
       ["video-pre-roll", "Q1-2027"],
     ];
-    const buckets = new Set(inputs.map(([f, p]) => engine.forecast(f!, p!).bucket));
+    const buckets = new Set(
+      await Promise.all(inputs.map(async ([f, p]) => (await engine.forecast(f!, p!)).bucket))
+    );
     expect(buckets.size).toBeGreaterThan(1); // variety in demo
   });
 
-  it("bucket_label matches the bucket value", () => {
-    const result = engine.forecast("display-ros", "Q4-2026");
+  it("bucket_label matches the bucket value", async () => {
+    const result = await engine.forecast("display-ros", "Q4-2026");
     expect(result.bucket_label).toBe(BUCKET_LABELS[result.bucket]);
   });
 
@@ -75,19 +78,75 @@ describe("ForecastEngine — synthetic demo forecast (S5)", () => {
 });
 
 // ─────────────────────────────────────────────
+// ForecastSource seam — engine is source-agnostic (DP-AB-01 §5.2, avails-only)
+// ─────────────────────────────────────────────
+describe("ForecastSource seam — ForecastEngine consumes an injectable source", () => {
+  it("default engine uses the synthetic source (buckets match SyntheticForecastSource)", async () => {
+    const engine = new ForecastEngine();
+    const source = new SyntheticForecastSource();
+    const result = await engine.forecast("display-ros", "Q4-2026");
+    const expectedBucket = await source.getAvailsBucket("display-ros", "Q4-2026");
+    expect(result.bucket).toBe(expectedBucket);
+  });
+
+  it("an injected source drives the bucket (constructor injection)", async () => {
+    // A fake source that always returns HIGH — proves the engine defers to the seam,
+    // not a hardwired algorithm.
+    const fixedHigh: ForecastSource = {
+      async getAvailsBucket() {
+        return FORECAST_BUCKET.HIGH;
+      },
+    };
+    const engine = new ForecastEngine(fixedHigh);
+    const result = await engine.forecast("anything", "any-period");
+    expect(result.bucket).toBe(FORECAST_BUCKET.HIGH);
+    expect(result.bucket_label).toBe(BUCKET_LABELS.high);
+  });
+
+  it("synthetic flag stays true regardless of the injected source (invariant until production gate)", async () => {
+    const fixedLow: ForecastSource = {
+      async getAvailsBucket() {
+        return FORECAST_BUCKET.LOW;
+      },
+    };
+    const result = await new ForecastEngine(fixedLow).forecast("x", "y");
+    expect(result.synthetic).toBe(true);
+  });
+
+  it("SyntheticForecastSource is deterministic per family+period", async () => {
+    const source = new SyntheticForecastSource();
+    const a = await source.getAvailsBucket("branded-content", "Q3-2026");
+    const b = await source.getAvailsBucket("branded-content", "Q3-2026");
+    expect(a).toBe(b);
+    expect(Object.values(FORECAST_BUCKET)).toContain(a);
+  });
+
+  it("GamForecastSource is a stub — throws until service account provisioning (DP-AB-01 §5.2)", async () => {
+    const gam = new GamForecastSource({ networkCode: "12345678", serviceAccountKeyPath: "GAM_SA_KEY" });
+    await expect(gam.getAvailsBucket("display-ros", "Q4-2026")).rejects.toThrow(/not implemented/i);
+  });
+
+  it("an engine wired to GamForecastSource surfaces the stub error (no silent GAM read)", async () => {
+    const gam = new GamForecastSource({ networkCode: "12345678", serviceAccountKeyPath: "GAM_SA_KEY" });
+    const engine = new ForecastEngine(gam);
+    await expect(engine.forecast("display-ros", "Q4-2026")).rejects.toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────
 // Pilar 3 — consent fields reserved null
 // ─────────────────────────────────────────────
 describe("Forecast — Pilar 3 reserved fields (privacy-consent-layer §3)", () => {
   const engine = new ForecastEngine();
 
-  it("consent_context is null — Pilar 3 reserved, not interpreted", () => {
-    const result = engine.forecast("display-ros", "Q4-2026");
+  it("consent_context is null — Pilar 3 reserved, not interpreted", async () => {
+    const result = await engine.forecast("display-ros", "Q4-2026");
     expect(result).toHaveProperty("consent_context");
     expect(result.consent_context).toBeNull();
   });
 
-  it("legal_basis_provenance is null — Pilar 3 reserved, not interpreted", () => {
-    const result = engine.forecast("display-ros", "Q4-2026");
+  it("legal_basis_provenance is null — Pilar 3 reserved, not interpreted", async () => {
+    const result = await engine.forecast("display-ros", "Q4-2026");
     expect(result).toHaveProperty("legal_basis_provenance");
     expect(result.legal_basis_provenance).toBeNull();
   });
@@ -120,24 +179,24 @@ describe("Z3 invariant — forecast response contains no user-level fields", () 
     "gam_product_id",
   ];
 
-  it("forecast response contains no Z3-forbidden user-level fields", () => {
-    const result = engine.forecast("display-ros", "Q4-2026");
+  it("forecast response contains no Z3-forbidden user-level fields", async () => {
+    const result = await engine.forecast("display-ros", "Q4-2026");
     const serialized = JSON.stringify(result);
     for (const field of Z3_FORBIDDEN) {
       expect(serialized).not.toContain(field);
     }
   });
 
-  it("forecast response contains no GAM internal identifiers", () => {
-    const result = engine.forecast("video-pre-roll", "Q3-2026");
+  it("forecast response contains no GAM internal identifiers", async () => {
+    const result = await engine.forecast("video-pre-roll", "Q3-2026");
     const serialized = JSON.stringify(result);
     for (const field of GAM_FORBIDDEN) {
       expect(serialized).not.toContain(field);
     }
   });
 
-  it("forecast response has exactly the allowed schema fields", () => {
-    const result = engine.forecast("display-ros", "Q4-2026");
+  it("forecast response has exactly the allowed schema fields", async () => {
+    const result = await engine.forecast("display-ros", "Q4-2026");
     const keys = new Set(Object.keys(result));
     const allowed = new Set(["family_id", "period", "bucket", "bucket_label", "ttl_seconds", "synthetic", "consent_context", "legal_basis_provenance"]);
     for (const key of keys) {
@@ -145,8 +204,8 @@ describe("Z3 invariant — forecast response contains no user-level fields", () 
     }
   });
 
-  it("forecast response contains only inventory-level data (not audience-level)", () => {
-    const result = engine.forecast("display-ros", "Q4-2026");
+  it("forecast response contains only inventory-level data (not audience-level)", async () => {
+    const result = await engine.forecast("display-ros", "Q4-2026");
     // Bucket is about fill/availability — not audience composition
     expect(["low", "mid", "high"]).toContain(result.bucket);
     // No audience metadata attached

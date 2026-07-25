@@ -55,10 +55,10 @@ describe("PATH A guard — consent fields are null everywhere buyer-facing (Z3 +
     }
   });
 
-  it("every forecast result passes the consent-empty guard", () => {
+  it("every forecast result passes the consent-empty guard", async () => {
     const engine = new ForecastEngine();
     for (const family of ["display-ros", "video-pre-roll", "branded-content"]) {
-      const result = engine.forecast(family, "Q4-2026");
+      const result = await engine.forecast(family, "Q4-2026");
       expect(() => assertConsentFieldsEmpty(result)).not.toThrow();
     }
   });
