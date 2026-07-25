@@ -6,6 +6,8 @@
 
 import type { ForecastBucket } from "./engine.js";
 
+// The seam ForecastEngine consumes. The wired default is SyntheticForecastSource (in engine.ts,
+// GAM-less, deterministic); GamForecastSource below is the pending real implementation.
 export interface ForecastSource {
   getAvailsBucket(family_id: string, period: string): Promise<ForecastBucket>;
 }
