@@ -64,4 +64,47 @@ to version.
 
 - Nothing yet.
 
+## [0.2.0] — 2026-07-27
+
+Second release. The theme is **making the privacy posture real at runtime**: the retention and
+minimization commitments the node advertises in its well-known document are now enforced
+automatically, not merely documented. Plus observability and a source-agnostic forecast core.
+
+### Data protection and GDPR
+
+- **Automatic ledger retention (A3).** The hot → archive → purge lifecycle is now enforced on a
+  schedule (startup catch-up + periodic tick), not just defined. Previously `rotate()`/`purge()`
+  existed but were never called, so the audit ledger grew without bound. Head-hash anchors still
+  survive purge indefinitely — a hash without its ledger is not personal data.
+- **Pseudonym keystore retention (crypto-shred by inactivity).** The per-buyer pseudonym keys —
+  the one place a raw `buyer_id` still persisted in clear — now expire on the same A3 horizon. An
+  inactive buyer's key is destroyed, making its ledger entries irreversibly anonymous without
+  breaking the hash-chain; a re-appearing buyer gets a fresh, unlinkable key. The keystore gains a
+  `last_used_at` stamp and migrates the previous on-disk format transparently.
+
+### Observability
+
+- **Prometheus metrics endpoint.** `/metrics` exposes request, auth, and policy counters for
+  scraping.
+
+### Forecast
+
+- **Source-agnostic forecast engine.** `ForecastEngine` now takes an injectable `ForecastSource`.
+  The default `SyntheticForecastSource` preserves the deterministic bucketing; a `GamForecastSource`
+  stub is present but throws until a real GAM credential is authorized — so the `synthetic: true`
+  invariant stays honest by construction.
+
+### Dependencies and toolchain
+
+- jose 5 → 6 (migrated off the removed `KeyLike` type to the global `CryptoKey`, and generate
+  extractable RS256 keys so JWK persistence keeps working), zod 3 → 4, @types/node 18 → 26.
+- GitHub Actions bumped: checkout v7, setup-node v7, setup-python v7. Dependabot configured for
+  weekly npm + Actions updates.
+- Repo hygiene: package.json metadata, `.nvmrc` (Node 22), `.editorconfig`.
+
+### Testing
+
+- Added integration coverage that `pricing_options` is absent when every configured price is expired.
+
+[0.2.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.2.0
 [0.1.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.1.0
