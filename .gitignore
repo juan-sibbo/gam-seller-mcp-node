@@ -19,6 +19,10 @@ keys/
 *.db
 *.sqlite
 
+# Runtime dev stores (ledger, pseudonym keys, archive, anchor, DSR overlay).
+# These hold operational state — including buyer_ids in clear — and must never be committed.
+data/
+
 # OS
 .DS_Store
 Thumbs.db
