@@ -40,6 +40,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "typecheck": "tsc -p tsconfig.check.json",
     "start": "node dist/server.js",
     "start:http": "node dist/server.js --http",
     "test": "vitest run",

@@ -90,8 +90,14 @@ export class DsrToolkit {
     const hotCount = pseudonym ? this.matchEntries(ledger.allEntries(), pseudonym).length : 0;
     const archivedCount = pseudonym ? this.matchArchived(pseudonym).length : 0;
 
-    const keyShredded = pseudonyms.shred(buyer_id);
+    // Order matters for crash safety: persist the entitlement erasure to the overlay FIRST,
+    // then destroy the key. If the process dies between the two, the durable legal record
+    // (overlay) is correct — the buyer is denied on the next boot — and only the key is left
+    // un-shredded (privacy-conservative). The reverse order could shred the key yet leave the
+    // entitlement active on disk, re-granting an erased buyer after a restart. Counts are taken
+    // above, before either mutation, while the pseudonym is still computable.
     const entitlementRemoved = store.remove(buyer_id);
+    const keyShredded = pseudonyms.shred(buyer_id);
 
     return {
       buyer_id,

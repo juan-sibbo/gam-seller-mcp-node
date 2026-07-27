@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from "fs";
+import { mkdtempSync, rmSync, writeFileSync, existsSync, statSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { loadDsrState, saveDsrState, validateDsrState } from "../src/policy/dsr-state.js";
@@ -47,6 +47,17 @@ describe("dsr-state module", () => {
     const state = { suppressed: ["buyer-a"], restricted: ["buyer-b"] };
     saveDsrState(path, state);
     expect(loadDsrState(path)).toEqual(state);
+  });
+
+  it("fails closed on a non-ENOENT read error (does not conflate unreadable with absent)", () => {
+    // Reading the directory itself yields EISDIR, not ENOENT — must throw, not return empty.
+    expect(() => loadDsrState(dir)).toThrow(/fail-closed/i);
+  });
+
+  it("writes atomically with owner-only permissions and leaves no temp file", () => {
+    saveDsrState(path, { suppressed: ["buyer-a"], restricted: [] });
+    expect(existsSync(`${path}.tmp`)).toBe(false);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 });
 
