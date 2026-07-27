@@ -1,4 +1,7 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { DsrToolkit } from "../src/dsr/toolkit.js";
 import { createMemoryLedger } from "../src/audit/ledger.js";
 import { createMemoryPseudonyms } from "../src/audit/pseudonym.js";
@@ -122,5 +125,40 @@ describe("DsrToolkit — suppressBuyer (Art. 17 via crypto-shredding)", () => {
     expect(result.key_shredded).toBe(false);
     expect(result.entitlement_removed).toBe(false);
     expect(result.anonymized_hot_entries).toBe(0);
+  });
+});
+
+// F4/F5 — the DSR CLI operates a store backed by a persistent overlay, so an operator's
+// restriction/erasure survives the process and is enforced by the next server boot.
+describe("DsrToolkit — persistence via overlay (F4/F5 end-to-end)", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "dsr-overlay-"));
+    path = join(dir, "dsr-state.json");
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a restriction persists and is enforced by a freshly reloaded store (Art. 18)", () => {
+    const store = new EntitlementStore(TEST_ENTITLEMENTS_DEMO_CONFIG, path);
+    const toolkit = new DsrToolkit({ store, ledger: createMemoryLedger() });
+    expect(toolkit.restrictBuyer(BUYER)).toBe(true);
+
+    const reloaded = new EntitlementStore(TEST_ENTITLEMENTS_DEMO_CONFIG, path);
+    expect(new PolicyEngine(reloaded).decide(POLICY_REQ).outcome).toBe("DENY");
+  });
+
+  it("an erasure persists and survives a later config re-grant (Art. 17)", () => {
+    const store = new EntitlementStore(TEST_ENTITLEMENTS_DEMO_CONFIG, path);
+    const toolkit = new DsrToolkit({ store, ledger: createMemoryLedger() });
+    toolkit.suppressBuyer(BUYER);
+
+    // Same config still grants BUYER, but the persisted erasure must win after reload.
+    const reloaded = new EntitlementStore(TEST_ENTITLEMENTS_DEMO_CONFIG, path);
+    expect(reloaded.get(BUYER)).toBeUndefined();
   });
 });
