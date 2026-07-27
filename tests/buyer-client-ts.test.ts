@@ -37,9 +37,11 @@ describe("examples/buyer-client-ts — SellerMcpBuyerClient against a live node"
       wellKnown,
       catalog: new CatalogStore(TEST_CATALOG_CONFIG),
       pricingStore: new PricingStore(TEST_PRICING_CONFIG),
-      rateLimiter: new RateLimiter(),
+      // windowMs=0 disables the per-buyer window: these tests reuse the entitled buyer across
+      // several calls and are not exercising rate limiting (same pattern as catalog.test.ts).
+      rateLimiter: new RateLimiter(0),
       forecastEngine: new ForecastEngine(),
-      forecastRateLimiter: new RateLimiter(),
+      forecastRateLimiter: new RateLimiter(0),
       ledger: createMemoryLedger(),
     };
     httpServer = await startHttpServer(
