@@ -1,7 +1,12 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { PseudonymService, createMemoryPseudonyms } from "../src/audit/pseudonym.js";
 import { AuditLedger, createMemoryLedger } from "../src/audit/ledger.js";
 import { EventClass } from "../src/audit/event.js";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 // S6 F2 — ledger pseudonymization + crypto-shredding (gdpr-analysis §Q1.2, act A1)
 
@@ -65,6 +70,96 @@ describe("PseudonymService", () => {
       const after = service.pseudonymize("buyer-a");
       expect(after).not.toBe(before); // fresh key → pre-shred history unrecoverable
     });
+  });
+
+  // F2 — automatic crypto-shred by inactivity (A3-aligned keystore retention).
+  describe("shredInactive (retention by inactivity)", () => {
+    it("deletes keys older than the cutoff and KEEPS active ones", async () => {
+      service.pseudonymize("stale");
+      // Boundary between the two keys: stale was used before it, active after it.
+      const cutoff = Date.now() + 1;
+      await new Promise((r) => setTimeout(r, 5));
+      service.pseudonymize("active"); // last_used_at > cutoff
+
+      expect(service.shredInactive(cutoff)).toBe(1); // only "stale" is inactive
+      expect(service.hasKey("stale")).toBe(false);
+      expect(service.hasKey("active")).toBe(true);
+    });
+
+    it("re-pseudonymize refreshes last_used_at (active buyer does not expire)", async () => {
+      const first = service.pseudonymize("buyer-a");
+      const cutoffBefore = Date.now() + 1;
+      await new Promise((r) => setTimeout(r, 5));
+      const second = service.pseudonymize("buyer-a"); // touch → last_used_at advances
+      expect(second).toBe(first); // same key, correlation preserved
+      // A sweep at a cutoff BEFORE the refresh must not touch buyer-a.
+      expect(service.shredInactive(cutoffBefore)).toBe(0);
+      expect(service.hasKey("buyer-a")).toBe(true);
+    });
+
+    it("after shredInactive, a re-appearing buyer gets an UNLINKABLE fresh key", () => {
+      const before = service.pseudonymize("buyer-a");
+      service.shredInactive(Date.now() + DAY_MS); // sweep everything
+      expect(service.hasKey("buyer-a")).toBe(false);
+      const after = service.pseudonymize("buyer-a");
+      expect(after).not.toBe(before); // fresh key → pre-shred history unrecoverable
+    });
+
+    it("is a no-op when no key is inactive", () => {
+      service.pseudonymize("buyer-a");
+      expect(service.shredInactive(Date.now() - DAY_MS)).toBe(0);
+      expect(service.keyCount()).toBe(1);
+    });
+  });
+});
+
+describe("PseudonymService — persistence & schema migration", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "psn-"));
+    path = join(dir, "keys.json");
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("migrates the LEGACY flat schema (buyer_id → hex) without breaking", () => {
+    const legacyKey = "a".repeat(64);
+    writeFileSync(path, JSON.stringify({ keys: { "buyer-a": legacyKey } }), "utf-8");
+
+    const service = new PseudonymService(path);
+    expect(service.hasKey("buyer-a")).toBe(true);
+    // The legacy hex is preserved as the HMAC key, so the pseudonym is stable across
+    // loads (a second instance re-reads the same legacy file and migrates identically).
+    const svc2 = new PseudonymService(path);
+    expect(svc2.pseudonymize("buyer-a")).toBe(service.pseudonymize("buyer-a"));
+  });
+
+  it("migration does NOT immediately shred (last_used_at set to load time, not epoch)", () => {
+    const legacyKey = "b".repeat(64);
+    writeFileSync(path, JSON.stringify({ keys: { "buyer-a": legacyKey } }), "utf-8");
+
+    const service = new PseudonymService(path);
+    // A sweep with a cutoff of 'a horizon ago' must NOT delete the freshly-loaded key.
+    const oneYearAgo = Date.now() - 365 * DAY_MS;
+    expect(service.shredInactive(oneYearAgo)).toBe(0);
+    expect(service.hasKey("buyer-a")).toBe(true);
+  });
+
+  it("round-trips the v2 schema with timestamps", () => {
+    const a = new PseudonymService(path);
+    const p1 = a.pseudonymize("buyer-a");
+
+    const raw = JSON.parse(readFileSync(path, "utf-8"));
+    expect(raw.version).toBe(2);
+    expect(typeof raw.keys["buyer-a"].last_used_at).toBe("number");
+    expect(typeof raw.keys["buyer-a"].created_at).toBe("number");
+
+    const b = new PseudonymService(path);
+    expect(b.pseudonymize("buyer-a")).toBe(p1); // key survives reload
   });
 });
 

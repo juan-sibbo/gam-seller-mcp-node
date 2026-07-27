@@ -317,9 +317,12 @@ async function main() {
   // Without this scheduled cycle, rotate()/purge() never run and the "automatic" purge
   // would be dead code — the ledger would grow unbounded, breaking storage limitation
   // (GDPR Art. 5(1)(e)). Runs once at startup to catch up on downtime, then on a timer.
+  // The same cycle also crypto-shreds pseudonym keys inactive beyond the retention
+  // horizon (hot_days + archive_months): the keystore is the only place the clear
+  // buyer_id survives, so it obeys the same storage-limitation principle as the ledger.
   const retention = new RetentionService(deployment.retention, anchor, DEV_ARCHIVE_PATH);
-  runRetentionCycle(retention, ledger);
-  setInterval(() => runRetentionCycle(retention, ledger), RETENTION_INTERVAL_MS).unref();
+  runRetentionCycle(retention, ledger, Date.now(), pseudonyms);
+  setInterval(() => runRetentionCycle(retention, ledger, Date.now(), pseudonyms), RETENTION_INTERVAL_MS).unref();
 
   const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, metricsRegistry };
 
