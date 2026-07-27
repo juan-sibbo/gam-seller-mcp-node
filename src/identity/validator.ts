@@ -1,4 +1,4 @@
-import { jwtVerify, type KeyLike } from "jose";
+import { jwtVerify } from "jose";
 import { DOMAIN2_ISS, DOMAIN2_AUD, type ValidationResult } from "./types.js";
 import type { Denylist } from "./denylist.js";
 
@@ -10,7 +10,7 @@ import type { Denylist } from "./denylist.js";
 //   3. Denylist check (jti) — denylist PREVAILS over valid signature
 export class TokenValidator {
   constructor(
-    private readonly publicKey: KeyLike,
+    private readonly publicKey: CryptoKey,
     private readonly denylist: Denylist,
     private readonly iss: string = DOMAIN2_ISS,
     private readonly aud: string = DOMAIN2_AUD

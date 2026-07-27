@@ -1,8 +1,8 @@
-import { generateKeyPair, exportJWK, importJWK, type KeyLike, type JWK } from "jose";
+import { generateKeyPair, exportJWK, importJWK, type JWK } from "jose";
 
 export interface KeyPairBundle {
-  privateKey: KeyLike;
-  publicKey: KeyLike;
+  privateKey: CryptoKey;
+  publicKey: CryptoKey;
   publicJwk: JWK;
 }
 
@@ -10,8 +10,12 @@ export interface KeyPairBundle {
 // PRODUCTION: load from a file outside the repo (keys/ is gitignored).
 // Tests: always generate ephemeral — never write keys to disk in tests.
 export async function generateDevKeyPair(): Promise<KeyPairBundle> {
+  // jose 6 generates NON-extractable keys by default; the keystore must export the
+  // private key to a JWK file to persist identity across reboots (I-9), so RS256 keys
+  // must be extractable. This restores jose 5's default behavior explicitly.
   const { privateKey, publicKey } = await generateKeyPair("RS256", {
     modulusLength: 2048,
+    extractable: true,
   });
   const publicJwk = await exportJWK(publicKey);
   return { privateKey, publicKey, publicJwk };
@@ -24,6 +28,6 @@ export function makeJwkSet(publicJwk: JWK): { keys: JWK[] } {
 }
 
 // Re-import a JWK public key (used in validator when rotating keys)
-export async function importPublicJwk(jwk: JWK): Promise<KeyLike> {
-  return importJWK(jwk, "RS256") as Promise<KeyLike>;
+export async function importPublicJwk(jwk: JWK): Promise<CryptoKey> {
+  return importJWK(jwk, "RS256") as Promise<CryptoKey>;
 }

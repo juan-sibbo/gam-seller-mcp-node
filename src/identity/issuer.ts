@@ -1,6 +1,5 @@
 import { SignJWT } from "jose";
 import { randomUUID } from "crypto";
-import type { KeyLike } from "jose";
 import {
   DOMAIN2_ISS,
   DOMAIN2_AUD,
@@ -13,10 +12,10 @@ import {
 // Signs inter-service JWTs with RS256. Buyer never sees these tokens —
 // they are used by the MCP server when calling the (future) GAM Adapter.
 export class TokenIssuer {
-  private readonly privateKey: KeyLike;
+  private readonly privateKey: CryptoKey;
   private readonly ttl: number;
 
-  constructor(privateKey: KeyLike, ttlSeconds = DOMAIN2_TTL_SECONDS) {
+  constructor(privateKey: CryptoKey, ttlSeconds = DOMAIN2_TTL_SECONDS) {
     this.privateKey = privateKey;
     this.ttl = ttlSeconds;
   }

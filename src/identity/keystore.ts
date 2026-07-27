@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { dirname } from "path";
-import { exportJWK, importJWK, type KeyLike, type JWK } from "jose";
+import { exportJWK, importJWK, type JWK } from "jose";
 import { generateDevKeyPair, type KeyPairBundle } from "./jwk.js";
 
 // Persistent RS256 keypair — Fase A (resolves auditoría I-9).
@@ -38,10 +38,10 @@ export async function loadOrCreateKeyPair(path = DEV_KEYSTORE_PATH): Promise<Key
           `Emergency rotation = delete the file and restart. Cause: ${err instanceof Error ? err.message : String(err)}`
       );
     }
-    const privateKey = (await importJWK(privateJwk, "RS256")) as KeyLike;
+    const privateKey = (await importJWK(privateJwk, "RS256")) as CryptoKey;
     // RSA private JWK contains the public components — derive the public JWK from them.
     const publicJwk: JWK = { kty: privateJwk.kty, n: privateJwk.n, e: privateJwk.e };
-    const publicKey = (await importJWK(publicJwk, "RS256")) as KeyLike;
+    const publicKey = (await importJWK(publicJwk, "RS256")) as CryptoKey;
     return { privateKey, publicKey, publicJwk };
   }
 
