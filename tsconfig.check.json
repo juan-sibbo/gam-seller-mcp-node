@@ -1,0 +1,14 @@
+{
+  "//": "Type-check-only config (no emit). Widens coverage beyond the build config to catch",
+  "//2": "type errors in scripts/ and examples/ — the DSR CLI and the buyer-client example are",
+  "//3": "shipped code but are outside the build's src-only rootDir. Used by `npm run typecheck` and CI.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": ["src/**/*", "scripts/**/*", "examples/**/*"],
+  "exclude": ["node_modules", "dist", "tests"]
+}

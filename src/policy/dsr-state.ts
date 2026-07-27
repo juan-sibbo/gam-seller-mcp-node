@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, renameSync, mkdirSync } from "fs";
 import { dirname } from "path";
 
 // Persistent DSR overlay — a durable record of the GDPR legal overrides applied on top of
@@ -32,8 +32,18 @@ export function loadDsrState(path: string): DsrState {
   let raw: string;
   try {
     raw = readFileSync(path, "utf-8");
-  } catch {
-    return emptyDsrState(); // first run — no overrides yet
+  } catch (err) {
+    // ONLY a genuinely missing file is a legitimate first run. Any other read error
+    // (EACCES permission denied, EISDIR, I/O) on a pre-existing overlay must fail closed —
+    // returning an empty overlay would silently drop every persisted erasure/restriction and
+    // re-expose the affected buyers. Do not conflate "absent" with "unreadable".
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return emptyDsrState();
+    }
+    throw new Error(
+      `[dsr-state] Cannot read DSR overlay at ${path} ` +
+        `(${(err as NodeJS.ErrnoException).code ?? "unknown"}) — refusing to start (fail-closed)`
+    );
   }
   let parsed: unknown;
   try {
@@ -66,6 +76,12 @@ function isStringArray(v: unknown): v is string[] {
 }
 
 export function saveDsrState(path: string, state: DsrState): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(state, null, 2), "utf-8");
+  // Atomic write: a crash (SIGKILL, power loss) mid-write must never leave a torn file that
+  // fails the node closed on the next boot. Write to a sibling temp file, then rename —
+  // rename is atomic on POSIX within the same filesystem, so a reader always sees either the
+  // old or the new complete file. Owner-only permissions: the overlay holds raw buyer_ids.
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, JSON.stringify(state, null, 2), { encoding: "utf-8", mode: 0o600 });
+  renameSync(tmp, path);
 }

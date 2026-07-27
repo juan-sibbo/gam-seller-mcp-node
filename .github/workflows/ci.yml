@@ -12,7 +12,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npx tsc --noEmit
+      - run: npx tsc -p tsconfig.check.json
       - run: npx vitest run
 
   interop-probe:

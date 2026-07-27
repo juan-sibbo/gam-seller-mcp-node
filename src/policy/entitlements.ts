@@ -73,7 +73,9 @@ export class EntitlementStore {
   }
 
   has(buyer_id: string): boolean {
-    return this.index.has(buyer_id);
+    // An erased buyer must never test as present, regardless of index state — `erased` is the
+    // authoritative "must never be served" set (guards a hypothetical future re-grant path).
+    return this.index.has(buyer_id) && !this.erased.has(buyer_id);
   }
 
   // DSR restriction (Art. 18): stop processing without deleting the record.
