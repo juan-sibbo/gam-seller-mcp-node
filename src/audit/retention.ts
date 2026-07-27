@@ -5,6 +5,7 @@ import { EventClass } from "./event.js";
 import type { AuditLedger } from "./ledger.js";
 import type { HeadHashAnchor } from "./anchor.js";
 import type { RetentionConfig } from "../config/deployment.js";
+import type { PseudonymService } from "./pseudonym.js";
 
 // Ledger retention — SIGNED A3 (s6-consent-hardening-acts-2026-07-05.md):
 //   hot 90 days → archive 12 months → automatic purge.
@@ -98,6 +99,12 @@ export class RetentionService {
     return purged;
   }
 
+  // Read-only access to the signed retention values (used to derive the pseudonym
+  // key retention horizon in runRetentionCycle).
+  get retentionConfig(): RetentionConfig {
+    return this.config;
+  }
+
   allSegments(): readonly ArchivedSegment[] {
     return this.segments;
   }
@@ -129,19 +136,36 @@ export class RetentionService {
 
 export const DEV_ARCHIVE_PATH = "./data/ledger-archive.json";
 
+// Full lifetime of a recoverable ledger entry: while it is hot (hot_days) plus while
+// it sits in the archive with its payload intact (archive_months). Past this horizon
+// no recoverable entry references the buyer anymore. It is the natural, A3-aligned
+// cutoff for retiring the pseudonym key — the last place a clear buyer_id survives.
+export function pseudonymRetentionHorizonMs(config: RetentionConfig): number {
+  return config.hot_days * DAY_MS + config.archive_months * RETENTION_MONTH_MS;
+}
+
 // Enforce the full retention policy in one pass: rotate aged hot entries into an
-// anchored archive segment, then purge archive segments past archive_months. This
-// is what makes A3's "automatic purge at 12 months" actually automatic — main()
-// schedules it. Without a scheduled caller, rotate()/purge() are dead code and the
-// SIGNED retention act is not enforced at runtime.
+// anchored archive segment, purge archive segments past archive_months, and — if a
+// PseudonymService is supplied — crypto-shred pseudonym keys inactive beyond the
+// retention horizon. A single enforcement pass keeps storage limitation
+// (GDPR Art. 5(1)(e)) coherent across the ledger AND the keystore. This is what makes
+// A3's "automatic purge" actually automatic — main() schedules it. Without a scheduled
+// caller, rotate()/purge()/shredInactive() are dead code.
+//
+// pseudonyms is OPTIONAL so existing callers/tests keep working; when omitted, only
+// the ledger side runs and `shredded` is 0.
 export function runRetentionCycle(
   retention: RetentionService,
   ledger: AuditLedger,
-  nowMs = Date.now()
-): { rotated: ArchivedSegment | null; purged: number } {
+  nowMs = Date.now(),
+  pseudonyms?: PseudonymService
+): { rotated: ArchivedSegment | null; purged: number; shredded: number } {
   const rotated = retention.rotate(ledger, nowMs);
   const purged = retention.purge(nowMs);
-  return { rotated, purged };
+  const shredded = pseudonyms
+    ? pseudonyms.shredInactive(nowMs - pseudonymRetentionHorizonMs(retention.retentionConfig))
+    : 0;
+  return { rotated, purged, shredded };
 }
 
 // Cadence for the scheduled retention cycle. Retention resolution is days/months,

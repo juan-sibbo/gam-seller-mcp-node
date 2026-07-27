@@ -1,7 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createMemoryLedger } from "../src/audit/ledger.js";
 import { createMemoryAnchor, verifyAfterRestore } from "../src/audit/anchor.js";
-import { RetentionService, DAY_MS, RETENTION_MONTH_MS, runRetentionCycle } from "../src/audit/retention.js";
+import {
+  RetentionService,
+  DAY_MS,
+  RETENTION_MONTH_MS,
+  runRetentionCycle,
+  pseudonymRetentionHorizonMs,
+} from "../src/audit/retention.js";
+import { createMemoryPseudonyms } from "../src/audit/pseudonym.js";
 import { EventClass } from "../src/audit/event.js";
 
 // S6 F3 — retention SIGNED A3: 90d hot / 12m archive / anchors indefinite
@@ -233,5 +240,96 @@ describe("runRetentionCycle — scheduled enforcement (A3 automatic)", () => {
     expect(rotated).toBeNull();
     expect(purged).toBe(0);
     expect(ledger.size()).toBe(1);
+  });
+});
+
+// F2 — pseudonym keystore retention wired into the single enforcement pass.
+describe("runRetentionCycle — pseudonym key crypto-shred by inactivity (A3)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const HORIZON = pseudonymRetentionHorizonMs(RETENTION); // 90d + 12*30d
+
+  it("horizon = hot_days + archive_months (last recoverable-entry lifetime)", () => {
+    expect(HORIZON).toBe(90 * DAY_MS + 12 * RETENTION_MONTH_MS);
+  });
+
+  it("shreds a key inactive beyond the horizon, keeps a recently active one", () => {
+    const pseudonyms = createMemoryPseudonyms();
+    const ledger = createMemoryLedger(pseudonyms);
+    const retention = new RetentionService(RETENTION, createMemoryAnchor());
+
+    // stale-buyer last seen at T0; fresh-buyer seen at the sweep time.
+    vi.setSystemTime(T0);
+    ledger.append(EventClass.BUYER_AUTHENTICATION, {}, { buyer_id: "stale-buyer" });
+
+    const sweepTime = T0 + HORIZON + DAY_MS; // one day past the horizon for stale-buyer
+    vi.setSystemTime(sweepTime);
+    ledger.append(EventClass.FORECAST_REQUEST, { bucket: "mid" }, { buyer_id: "fresh-buyer" });
+
+    const { shredded } = runRetentionCycle(retention, ledger, sweepTime, pseudonyms);
+
+    expect(shredded).toBe(1);
+    expect(pseudonyms.hasKey("stale-buyer")).toBe(false);
+    expect(pseudonyms.hasKey("fresh-buyer")).toBe(true);
+  });
+
+  it("integration: horizon-lapsed keys are shredded alongside the ledger purge", () => {
+    const pseudonyms = createMemoryPseudonyms();
+    const ledger = createMemoryLedger(pseudonyms);
+    const retention = new RetentionService(RETENTION, createMemoryAnchor());
+
+    // A buyer active only at T0. Its key's last_used_at = T0.
+    vi.setSystemTime(T0);
+    ledger.append(EventClass.BUYER_AUTHENTICATION, {}, { buyer_id: "b-old" });
+    expect(pseudonyms.hasKey("b-old")).toBe(true);
+
+    // First cycle at T0+100d: rotates the aged entry (segment closes at T0+100d),
+    // nothing to purge or shred yet.
+    const c1 = runRetentionCycle(retention, ledger, T0 + 100 * DAY_MS, pseudonyms);
+    expect(c1.rotated).not.toBeNull();
+    expect(c1.shredded).toBe(0); // 100d < horizon (90d + 360d)
+    expect(pseudonyms.hasKey("b-old")).toBe(true);
+
+    // Second cycle late enough for BOTH thresholds: past the key's inactivity horizon
+    // (measured from last activity T0) AND past the segment's archive window (measured
+    // from close T0+100d). The two clocks differ by design, so we pick a time beyond
+    // both — the point of the test is that a single cycle enforces both.
+    const sweepTime = T0 + 100 * DAY_MS + 13 * RETENTION_MONTH_MS;
+    const c2 = runRetentionCycle(retention, ledger, sweepTime, pseudonyms);
+    expect(c2.purged).toBe(1);
+    expect(c2.shredded).toBe(1);
+    expect(pseudonyms.hasKey("b-old")).toBe(false);
+  });
+
+  it("re-appearing buyer after inactivity shred gets a fresh, unlinkable key", () => {
+    const pseudonyms = createMemoryPseudonyms();
+    const ledger = createMemoryLedger(pseudonyms);
+    const retention = new RetentionService(RETENTION, createMemoryAnchor());
+
+    vi.setSystemTime(T0);
+    const before = pseudonyms.pseudonymize("b-old");
+
+    const sweepTime = T0 + HORIZON + DAY_MS;
+    runRetentionCycle(retention, ledger, sweepTime, pseudonyms);
+    expect(pseudonyms.hasKey("b-old")).toBe(false);
+
+    vi.setSystemTime(sweepTime);
+    const after = pseudonyms.pseudonymize("b-old");
+    expect(after).not.toBe(before); // pre-shred history unrecoverable
+  });
+
+  it("without a PseudonymService, the cycle still runs and reports shredded = 0", () => {
+    const ledger = createMemoryLedger();
+    const retention = new RetentionService(RETENTION, createMemoryAnchor());
+    vi.setSystemTime(T0);
+    ledger.append(EventClass.BUYER_AUTHENTICATION, {}, { buyer_id: "b1" });
+    const { shredded } = runRetentionCycle(retention, ledger, T0 + DAY_MS);
+    expect(shredded).toBe(0);
   });
 });
