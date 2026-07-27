@@ -3,6 +3,7 @@ import { fileURLToPath } from "url";
 import { join, dirname } from "path";
 import type { Entitlement } from "./types.js";
 import { AllowedSurface } from "./types.js";
+import { loadDsrState, saveDsrState, type DsrState } from "./dsr-state.js";
 
 // Entitlements loaded from config — one entry per buyer_id.
 // Production: replace with signed config file or DB read gated by policy.
@@ -23,10 +24,48 @@ export class EntitlementStore {
   // Art. 18 GDPR restriction: entitlement is kept but not served — get() returns
   // undefined, so the Policy Engine produces DENY (Default-Deny does the rest).
   private readonly suspended: Map<string, Entitlement>;
+  // Art. 17 GDPR erasure: buyer_ids removed by a data-subject request. Tracked so the
+  // erasure is durable across restarts and survives a later config re-grant.
+  private readonly erased: Set<string>;
+  // When set, DSR overrides (restrict/reinstate/erase) are persisted to this overlay file
+  // and re-applied on construction. Null = pure in-memory store (unchanged legacy behavior).
+  private readonly persistPath: string | null;
 
-  constructor(config: EntitlementsConfig) {
+  constructor(config: EntitlementsConfig, persistPath: string | null = null) {
     this.index = new Map(config.entitlements.map((e) => [e.buyer_id, e]));
     this.suspended = new Map();
+    this.erased = new Set();
+    this.persistPath = persistPath;
+    if (persistPath) {
+      this.applyOverlay(loadDsrState(persistPath));
+    }
+  }
+
+  // Re-apply persisted DSR overrides on top of the config-derived index. Erasure takes
+  // precedence over restriction. Mutates maps directly (no re-persist during load).
+  private applyOverlay(state: DsrState): void {
+    for (const buyer_id of state.suppressed) {
+      this.index.delete(buyer_id);
+      this.suspended.delete(buyer_id);
+      this.erased.add(buyer_id);
+    }
+    for (const buyer_id of state.restricted) {
+      if (this.erased.has(buyer_id)) continue;
+      const entitlement = this.index.get(buyer_id);
+      if (entitlement) {
+        this.index.delete(buyer_id);
+        this.suspended.set(buyer_id, entitlement);
+      }
+    }
+  }
+
+  // Write the current DSR override set to the overlay file. No-op for in-memory stores.
+  private persist(): void {
+    if (!this.persistPath) return;
+    saveDsrState(this.persistPath, {
+      suppressed: [...this.erased],
+      restricted: [...this.suspended.keys()],
+    });
   }
 
   get(buyer_id: string): Entitlement | undefined {
@@ -43,6 +82,7 @@ export class EntitlementStore {
     if (!entitlement) return false;
     this.index.delete(buyer_id);
     this.suspended.set(buyer_id, entitlement);
+    this.persist();
     return true;
   }
 
@@ -51,6 +91,7 @@ export class EntitlementStore {
     if (!entitlement) return false;
     this.suspended.delete(buyer_id);
     this.index.set(buyer_id, entitlement);
+    this.persist();
     return true;
   }
 
@@ -58,9 +99,13 @@ export class EntitlementStore {
     return this.suspended.has(buyer_id);
   }
 
-  // DSR erasure (Art. 17): remove the record entirely (active or suspended).
+  // DSR erasure (Art. 17): remove the record entirely (active or suspended) and record the
+  // erasure durably, so it persists across restarts and is not undone by a later config re-grant.
   remove(buyer_id: string): boolean {
-    return this.index.delete(buyer_id) || this.suspended.delete(buyer_id);
+    const removed = this.index.delete(buyer_id) || this.suspended.delete(buyer_id);
+    this.erased.add(buyer_id);
+    this.persist();
+    return removed;
   }
 }
 
