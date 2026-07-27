@@ -4,6 +4,7 @@ import { z } from "zod";
 import { pathToFileURL } from "url";
 import { PolicyEngine } from "./policy/engine.js";
 import { EntitlementStore, loadEntitlementsFromFile } from "./policy/entitlements.js";
+import { DEV_DSR_STATE_PATH } from "./policy/dsr-state.js";
 import { AllowedSurface } from "./policy/types.js";
 import { ErrorCode, makeSafeError } from "./errors/envelope.js";
 import { loadOrCreateKeyPair } from "./identity/keystore.js";
@@ -293,8 +294,10 @@ async function main() {
   const validator = new TokenValidator(keyPair.publicKey, denylist);
   const wellKnown = new WellKnownService(keyPair.privateKey, keyPair.publicKey, deployment);
   // Fail-closed: an invalid entitlements config (unknown surface, empty buyer_id) must
-  // prevent startup — loadEntitlementsFromFile throws before anything serves.
-  const store = new EntitlementStore(loadEntitlementsFromFile());
+  // prevent startup — loadEntitlementsFromFile throws before anything serves. The persistent
+  // DSR overlay is applied on top, so restrictions/erasures exercised via the DSR CLI are
+  // enforced from boot (and a corrupt overlay also fails closed).
+  const store = new EntitlementStore(loadEntitlementsFromFile(), DEV_DSR_STATE_PATH);
   const catalog = loadCatalogFromFile();
   // Fail-closed: loadPricingFromFile throws on missing/unparseable valid_until (D7).
   const pricingStore = loadPricingFromFile();
