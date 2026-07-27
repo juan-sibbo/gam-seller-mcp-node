@@ -1,4 +1,4 @@
-import { SignJWT, compactDecrypt, jwtVerify, type KeyLike } from "jose";
+import { SignJWT, compactDecrypt, jwtVerify } from "jose";
 import { randomUUID } from "crypto";
 import type { DeploymentConfig } from "../config/deployment.js";
 
@@ -84,8 +84,8 @@ export class WellKnownService {
   private cachedAtMs?: number;
 
   constructor(
-    private readonly privateKey: KeyLike,
-    private readonly publicKey: KeyLike,
+    private readonly privateKey: CryptoKey,
+    private readonly publicKey: CryptoKey,
     deployment: DeploymentConfig,
     private readonly nodeId = "seller-mcp-node-mvp"
   ) {

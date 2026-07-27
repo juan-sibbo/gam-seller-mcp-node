@@ -1,8 +1,8 @@
-import { generateKeyPair, exportJWK, importJWK, type KeyLike, type JWK } from "jose";
+import { generateKeyPair, exportJWK, importJWK, type JWK } from "jose";
 
 export interface KeyPairBundle {
-  privateKey: KeyLike;
-  publicKey: KeyLike;
+  privateKey: CryptoKey;
+  publicKey: CryptoKey;
   publicJwk: JWK;
 }
 
@@ -24,6 +24,6 @@ export function makeJwkSet(publicJwk: JWK): { keys: JWK[] } {
 }
 
 // Re-import a JWK public key (used in validator when rotating keys)
-export async function importPublicJwk(jwk: JWK): Promise<KeyLike> {
-  return importJWK(jwk, "RS256") as Promise<KeyLike>;
+export async function importPublicJwk(jwk: JWK): Promise<CryptoKey> {
+  return importJWK(jwk, "RS256") as Promise<CryptoKey>;
 }
