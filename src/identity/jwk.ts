@@ -10,8 +10,12 @@ export interface KeyPairBundle {
 // PRODUCTION: load from a file outside the repo (keys/ is gitignored).
 // Tests: always generate ephemeral — never write keys to disk in tests.
 export async function generateDevKeyPair(): Promise<KeyPairBundle> {
+  // jose 6 generates NON-extractable keys by default; the keystore must export the
+  // private key to a JWK file to persist identity across reboots (I-9), so RS256 keys
+  // must be extractable. This restores jose 5's default behavior explicitly.
   const { privateKey, publicKey } = await generateKeyPair("RS256", {
     modulusLength: 2048,
+    extractable: true,
   });
   const publicJwk = await exportJWK(publicKey);
   return { privateKey, publicKey, publicJwk };
