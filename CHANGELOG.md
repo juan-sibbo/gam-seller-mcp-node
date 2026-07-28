@@ -106,5 +106,37 @@ automatically, not merely documented. Plus observability and a source-agnostic f
 
 - Added integration coverage that `pricing_options` is absent when every configured price is expired.
 
+## [0.3.0] — 2026-07-28
+
+Third release. The theme is **making data-subject rights enforceable across restarts, not
+just implementable**: an Art. 17 erasure or an Art. 18 restriction now survives a process
+restart and a later config redeploy — plus a typed buyer client so integrators have a worked
+starting point.
+
+### Data protection and GDPR
+
+- **Persistent DSR overlay.** Erasures (Art. 17) and restrictions (Art. 18) are now recorded in
+  a durable overlay, kept deliberately separate from `config/entitlements.json` so a config
+  redeploy can never silently re-grant an erased buyer or lift a restriction. The overlay is
+  re-applied on boot and **fails closed on a corrupt file** — the node refuses to start rather
+  than silently re-expose an erased buyer. Previously restrict/reinstate/erase mutated an
+  in-memory map that died with the process, so a right exercised via the CLI evaporated on the
+  next restart.
+- **Operable DSR CLI on real state.** `scripts/dsr.ts` exposes `export`, `restrict`,
+  `unrestrict`, and `suppress` (Art. 15/20, 18, 17), reading the real `config/entitlements.json`
+  and persisting every mutation to the overlay — so `export` reflects a buyer's actual grants and
+  each action survives a restart. `suppress` crypto-shreds the buyer's pseudonym key and reports
+  how many ledger entries become irreversibly anonymous.
+- **Hardened DSR persistence path.** Pre-release audit fixes: the entitlement erasure is persisted
+  to the durable overlay *before* the pseudonym key is shredded (crash-safe ordering), and
+  affected-entry counts are taken while the pseudonym is still computable.
+
+### Examples
+
+- **Typed TypeScript buyer client + quickstart.** `examples/buyer-client-ts/` — a worked, typed
+  client and demo showing how a buyer agent connects over the transport and calls the read-only
+  tools. Seed of the buyer SDK.
+
+[0.3.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.3.0
 [0.2.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.2.0
 [0.1.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.1.0
