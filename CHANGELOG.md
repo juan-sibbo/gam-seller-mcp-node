@@ -137,11 +137,13 @@ starting point.
   client and demo showing how a buyer agent connects over the transport and calls the read-only
   tools. Seed of the buyer SDK.
 
-## [Unreleased]
+## [0.4.0] — 2026-07-29
 
-Work toward **v0.4 — "the engine starts"**: closing the two Tier-0 blockers. This entry
-covers **Bloque A (identity)**; Bloque B (a minimal commitment primitive) follows and needs
-an owner allowlist amendment before it can land.
+Fourth release. The theme is **identity — closing the impersonation hole**: a buyer's
+identity is now bound to its bearer token and can no longer be asserted as free input. This
+is the first of the two Tier-0 "engine" blockers; the second — a minimal commitment
+primitive (`create_intent`) — is re-sequenced to **v0.5** because it needs an owner allowlist
+amendment (new `INTENT` surface) before it can land.
 
 ### Identity — buyer→node binding (BREAKING)
 
@@ -162,7 +164,7 @@ an owner allowlist amendment before it can land.
 - **Example buyer client + guide updated** to the token-only contract (identity via `token`, no
   `buyer_id`).
 
-[Unreleased]: https://github.com/juan-sibbo/gam-seller-mcp-node/compare/v0.3.0...HEAD
+[0.4.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.4.0
 [0.3.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.3.0
 [0.2.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.2.0
 [0.1.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.1.0
