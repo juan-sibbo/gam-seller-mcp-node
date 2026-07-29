@@ -51,6 +51,10 @@ interface ServerDeps {
   // main() always passes ONE shared instance so intents survive across HTTP connections
   // (buildServer is called per-connection) — the same reason ledger/replayGuard are shared.
   intentStore?: IntentStore;
+  // Per-buyer rate limiter for create_intent (N=1/T=30s). Optional/shared for the same
+  // reason as intentStore: main() passes one instance so the throttle holds across
+  // connections. Absent → a fresh per-server limiter (fine for single-call tests).
+  intentRateLimiter?: RateLimiter;
   // Optional operator metrics. When absent, every handler runs unchanged and no
   // series are recorded — observability is additive, never on the request's critical path.
   metricsRegistry?: MetricsRegistry;
@@ -61,6 +65,7 @@ function buildServer(deps: ServerDeps): McpServer {
   // Shared commitment store when provided (main() path); a per-server fallback keeps
   // legacy call sites that never touch create_intent working unchanged.
   const intentStore = deps.intentStore ?? new IntentStore();
+  const intentRateLimiter = deps.intentRateLimiter ?? new RateLimiter();
   const policy = new PolicyEngine(store);
 
   // Record a handler's terminal outcome: the labelled call counter plus the current
@@ -342,6 +347,15 @@ function buildServer(deps: ServerDeps): McpServer {
         return authFailedResult(request_id);
       }
 
+      // Anti-abuse — create_intent is the only write surface, so it must throttle per buyer
+      // like the read tools (N=1/T=30s). Without this a buyer could flood the in-memory
+      // commitment store. Checked after policy, before any commitment write.
+      if (!intentRateLimiter.check(buyer_id)) {
+        metricsRegistry?.increment("mcp_rate_limited_total", { tool: MetricTool.CREATE_INTENT });
+        recordOutcome(MetricTool.CREATE_INTENT, ToolOutcome.RATE_LIMITED);
+        return rateLimitedResult(request_id);
+      }
+
       // Fail-closed on a stale or non-matching firm price (plan §3): priceFor returns
       // undefined when the family is unknown OR its firm price has expired — never commit
       // over a stale offer. A mismatched price_ref is rejected identically, with the same
@@ -427,6 +441,9 @@ async function main() {
   // Shared commitment store (v0.5 Bloque B) — one instance for the whole process so
   // intents survive across HTTP connections (buildServer runs per-connection).
   const intentStore = new IntentStore();
+  // Shared create_intent rate limiter (N=1/T=30s) — one instance so the throttle holds
+  // across connections, same reason as the discover/forecast limiters above.
+  const intentRateLimiter = new RateLimiter();
   // Shared metrics registry — the same instance backs both the tool handlers and the
   // /metrics HTTP route, so counters recorded in-handler are visible at scrape time.
   const metricsRegistry = new MetricsRegistry();
@@ -449,7 +466,7 @@ async function main() {
   runRetentionCycle(retention, ledger, Date.now(), pseudonyms);
   setInterval(() => runRetentionCycle(retention, ledger, Date.now(), pseudonyms), RETENTION_INTERVAL_MS).unref();
 
-  const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, intentStore, metricsRegistry };
+  const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, intentStore, intentRateLimiter, metricsRegistry };
 
   // Fase A: --http serves StreamableHTTP on 127.0.0.1 (external bind = infra act, #8/#10).
   // Default remains stdio for MCP-host usage.

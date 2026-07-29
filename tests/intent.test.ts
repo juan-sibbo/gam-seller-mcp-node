@@ -174,6 +174,24 @@ describe("Bloque B — create_intent commitment primitive", () => {
     expect(created.payload.intent_id).toBe(body.intent_id);
   });
 
+  // Anti-abuse — create_intent is the only write surface; it must throttle per buyer like
+  // the read tools (N=1/T=30s), so a buyer can't flood the commitment store.
+  it("rate-limits a second create_intent from the same buyer within the window", async () => {
+    const token = await buyerToken(ctx, ENTITLED_BUYER);
+    const args = { token, family_id: FAMILY, period: "Q4-2026", price_ref: FIRM_PRICE };
+
+    const first = await ctx.client.callTool({ name: "create_intent", arguments: args });
+    expect(first.isError).toBeFalsy();
+
+    // Distinct request (no client_request_id → not a replay); same buyer, within the window.
+    const second = await ctx.client.callTool({ name: "create_intent", arguments: args });
+    expect(second.isError).toBe(true);
+    expect(JSON.parse(firstText(second)).code).toBe("RATE_LIMITED");
+
+    // The throttled call never reaches the commitment write.
+    expect(ctx.intentStore.size()).toBe(1);
+  });
+
   // #4 — a replayed client_request_id is idempotent: it never creates a second intent.
   it("does not create a second intent for a replayed client_request_id", async () => {
     const token = await buyerToken(ctx, ENTITLED_BUYER);
