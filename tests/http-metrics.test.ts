@@ -9,6 +9,7 @@ import { generateDevKeyPair, type KeyPairBundle } from "../src/identity/jwk.js";
 import { TokenIssuer } from "../src/identity/issuer.js";
 import { TokenValidator } from "../src/identity/validator.js";
 import { createMemoryDenylist } from "../src/identity/denylist.js";
+import { BUYER_ISS, BUYER_AUD } from "../src/identity/types.js";
 import { WellKnownService } from "../src/discovery/well-known.js";
 import { TEST_DEPLOYMENT_CONFIG } from "../src/config/deployment.js";
 import { CatalogStore, TEST_CATALOG_CONFIG } from "../src/catalog/store.js";
@@ -29,16 +30,18 @@ let httpServer: Server;
 let baseUrl: string;
 let keyPair: KeyPairBundle;
 let metrics: MetricsRegistry;
+let issuer: TokenIssuer;
 
 beforeAll(async () => {
   keyPair = await generateDevKeyPair();
   const denylist = createMemoryDenylist();
   const wellKnown = new WellKnownService(keyPair.privateKey, keyPair.publicKey, TEST_DEPLOYMENT_CONFIG);
   metrics = new MetricsRegistry();
+  issuer = new TokenIssuer(keyPair.privateKey);
   const deps = {
     store: new EntitlementStore(TEST_ENTITLEMENTS_DEMO_CONFIG),
-    issuer: new TokenIssuer(keyPair.privateKey),
-    validator: new TokenValidator(keyPair.publicKey, denylist),
+    issuer,
+    validator: new TokenValidator(keyPair.publicKey, denylist, BUYER_ISS, BUYER_AUD),
     wellKnown,
     catalog: new CatalogStore(TEST_CATALOG_CONFIG),
     pricingStore: new PricingStore(TEST_PRICING_CONFIG),
@@ -80,7 +83,7 @@ describe("HTTP /metrics — loopback scrape target", () => {
 
   it("reflects a tool call driven through the MCP client", async () => {
     const client = await connectClient();
-    await client.callTool({ name: "discover_products", arguments: { buyer_id: ENTITLED_BUYER } });
+    await client.callTool({ name: "discover_products", arguments: { token: (await issuer.issue(ENTITLED_BUYER, BUYER_AUD)).token } });
     await client.close();
 
     const body = await (await fetch(baseUrl + METRICS_PATH)).text();

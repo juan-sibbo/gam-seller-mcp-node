@@ -11,6 +11,7 @@ import { loadOrCreateKeyPair } from "./identity/keystore.js";
 import { TokenIssuer } from "./identity/issuer.js";
 import { TokenValidator } from "./identity/validator.js";
 import { Denylist, DEV_DENYLIST_PATH } from "./identity/denylist.js";
+import { BUYER_ISS, BUYER_AUD } from "./identity/types.js";
 import { WellKnownService } from "./discovery/well-known.js";
 import { CatalogStore, loadCatalogFromFile } from "./catalog/store.js";
 import { PricingStore, loadPricingFromFile } from "./pricing/store.js";
@@ -27,7 +28,10 @@ import { startHttpServer, httpOptionsFromEnv } from "./http.js";
 import { MetricsRegistry, MetricTool, ToolOutcome, AuthFailReason } from "./metrics/registry.js";
 import { randomUUID } from "crypto";
 
-const CONTRACT_VERSION = "0.1.0";
+// Buyer contract shape. Bumped 0.1.0 → 0.2.0 in v0.4 Bloque A: buyer surfaces no longer
+// accept a buyer_id argument (identity is derived from the token's sub) — a breaking
+// change to the tool input shape, so the contract version moves.
+const CONTRACT_VERSION = "0.2.0";
 
 interface ServerDeps {
   store: EntitlementStore;
@@ -63,23 +67,30 @@ function buildServer(deps: ServerDeps): McpServer {
     version: CONTRACT_VERSION,
   });
 
-  // Validate an optional domain-2 token and audit the outcome.
+  // Derive the buyer identity from a validated buyer token (v0.4 Bloque A — buyer→node
+  // identity binding). Returns { buyer_id } (== token.sub) on success, or null on any
+  // failure. There is NO buyer_id input anywhere: a request's identity comes ONLY from
+  // its token, so a caller can never act as another buyer (the pre-v0.4 impersonation
+  // hole). No token → no derivable identity → deny (require_auth posture, A3).
   // Revocation or invalid token → AUTH_FAILED (soap-fault-redaction-signoff §4 Option A).
   // Emits BUYER_AUTHENTICATION (decision-package Bloque 2 §2.4) — the ledger pseudonymizes buyer_id.
   async function authenticate(
     token: string | undefined,
-    buyer_id: string,
     surface: AllowedSurface,
     request_id: string
-  ): Promise<boolean> {
-    if (!token) return true; // token optional in dev context — policy still gates below
+  ): Promise<{ buyer_id: string } | null> {
+    if (!token) return null;
     const validation = await validator.validate(token);
+    // On a denylist/invalid-audience deny we may have no claims — the auth event then
+    // carries no buyer_id (ledger.append drops a falsy buyer_id). Never trust input for it.
+    const buyer_id = validation.claims?.sub ?? "";
     ledger.append(
       EventClass.BUYER_AUTHENTICATION,
       { outcome: validation.valid ? "allow" : "deny", surface },
       { buyer_id, request_id }
     );
-    return validation.valid;
+    if (!validation.valid || buyer_id === "") return null;
+    return { buyer_id };
   }
 
   // Run the Policy Engine and audit the decision.
@@ -149,11 +160,10 @@ function buildServer(deps: ServerDeps): McpServer {
     "discover_products",
     "Discover coarse product families available to this buyer.",
     {
-      buyer_id: z.string().describe("Buyer identifier (opaque, B2B)"),
-      token: z.string().optional().describe("Domain-2 inter-service JWT (RS256)"),
+      token: z.string().optional().describe("Buyer bearer JWT (RS256, aud=seller-mcp-node). Identity is derived from token.sub."),
       client_request_id: z.string().optional().describe("Client-supplied idempotency key for replay detection"),
     },
-    async ({ buyer_id, token, client_request_id }) => {
+    async ({ token, client_request_id }) => {
       const request_id = randomUUID();
 
       // Replay check first (SEC-GATE-3) — before auth, so a replayed request never even
@@ -167,13 +177,15 @@ function buildServer(deps: ServerDeps): McpServer {
         replayGuard.record(client_request_id);
       }
 
-      // authenticate() returns false only when a token is present and invalid — so a
-      // failure here is specifically a bad/revoked token, not a policy denial.
-      if (!(await authenticate(token, buyer_id, AllowedSurface.PRODUCT_DISCOVERY, request_id))) {
+      // Identity is derived from the token — null means no/invalid/revoked token.
+      // buyer_id is token.sub, never client input (Bloque A: no impersonation surface).
+      const auth = await authenticate(token, AllowedSurface.PRODUCT_DISCOVERY, request_id);
+      if (!auth) {
         metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.DISCOVER_PRODUCTS, reason: AuthFailReason.TOKEN_INVALID });
         recordOutcome(MetricTool.DISCOVER_PRODUCTS, ToolOutcome.AUTH_FAILED);
         return authFailedResult(request_id);
       }
+      const buyer_id = auth.buyer_id;
 
       if (!resolveScope(buyer_id, AllowedSurface.PRODUCT_DISCOVERY, request_id)) {
         metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.DISCOVER_PRODUCTS, reason: AuthFailReason.SCOPE_DENIED });
@@ -213,13 +225,12 @@ function buildServer(deps: ServerDeps): McpServer {
     "get_forecast",
     "Get a coarse availability forecast (Low/Mid/High) for a product family and period. Demo mode: synthetic data only.",
     {
-      buyer_id: z.string().describe("Buyer identifier (opaque, B2B)"),
       family_id: z.string().describe("Product family ID from discover_products"),
       period: z.string().describe("Target period (e.g. Q4-2026, 2026-10)"),
-      token: z.string().optional().describe("Domain-2 inter-service JWT (RS256)"),
+      token: z.string().optional().describe("Buyer bearer JWT (RS256, aud=seller-mcp-node). Identity is derived from token.sub."),
       client_request_id: z.string().optional().describe("Client-supplied idempotency key for replay detection"),
     },
-    async ({ buyer_id, family_id, period, token, client_request_id }) => {
+    async ({ family_id, period, token, client_request_id }) => {
       const request_id = randomUUID();
 
       // Replay check first (SEC-GATE-3) — before auth, so a replayed request never even
@@ -233,11 +244,14 @@ function buildServer(deps: ServerDeps): McpServer {
         replayGuard.record(client_request_id);
       }
 
-      if (!(await authenticate(token, buyer_id, AllowedSurface.FORECAST, request_id))) {
+      // Identity derived from the token (Bloque A) — buyer_id is token.sub, never input.
+      const auth = await authenticate(token, AllowedSurface.FORECAST, request_id);
+      if (!auth) {
         metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.GET_FORECAST, reason: AuthFailReason.TOKEN_INVALID });
         recordOutcome(MetricTool.GET_FORECAST, ToolOutcome.AUTH_FAILED);
         return authFailedResult(request_id);
       }
+      const buyer_id = auth.buyer_id;
 
       if (!resolveScope(buyer_id, AllowedSurface.FORECAST, request_id)) {
         metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.GET_FORECAST, reason: AuthFailReason.SCOPE_DENIED });
@@ -291,7 +305,9 @@ async function main() {
 
   const denylist = new Denylist(DEV_DENYLIST_PATH);
   const issuer = new TokenIssuer(keyPair.privateKey);
-  const validator = new TokenValidator(keyPair.publicKey, denylist);
+  // Buyer→node identity axis (Bloque A): the validator guarding buyer surfaces accepts
+  // ONLY buyer bearer tokens (aud=seller-mcp-node), never Domain-2 node↔adapter tokens.
+  const validator = new TokenValidator(keyPair.publicKey, denylist, BUYER_ISS, BUYER_AUD);
   const wellKnown = new WellKnownService(keyPair.privateKey, keyPair.publicKey, deployment);
   // Fail-closed: an invalid entitlements config (unknown surface, empty buyer_id) must
   // prevent startup — loadEntitlementsFromFile throws before anything serves. The persistent

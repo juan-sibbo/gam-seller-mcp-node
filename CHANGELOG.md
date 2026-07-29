@@ -137,6 +137,32 @@ starting point.
   client and demo showing how a buyer agent connects over the transport and calls the read-only
   tools. Seed of the buyer SDK.
 
+## [Unreleased]
+
+Work toward **v0.4 — "the engine starts"**: closing the two Tier-0 blockers. This entry
+covers **Bloque A (identity)**; Bloque B (a minimal commitment primitive) follows and needs
+an owner allowlist amendment before it can land.
+
+### Identity — buyer→node binding (BREAKING)
+
+- **Buyer identity is now derived from the token, never from input.** `discover_products` and
+  `get_forecast` no longer accept a `buyer_id` argument; the request's identity is the `sub` of
+  a validated buyer bearer token (`aud=seller-mcp-node`). This closes the pre-v0.4 impersonation
+  hole where the token was optional and `buyer_id` arrived as free input, so any caller could act
+  as any buyer. **Breaking:** the buyer contract version moves `0.1.0 → 0.2.0`.
+- **A dedicated buyer audience axis.** The validator guarding buyer surfaces accepts only buyer
+  tokens (`aud=seller-mcp-node`), separate from the Domain-2 node↔adapter axis — a Domain-2 token
+  is rejected on a buyer surface.
+- **Token issuance and revocation CLIs.** `scripts/issue-buyer-token.ts <buyer_id>` mints a buyer
+  token signed with the node's persistent key; `scripts/revoke-token.ts <token>` adds its `jti` to
+  the durable denylist (which prevails over a valid signature).
+- **`require_auth` enforcement (fail-closed).** New deployment flag, defaults to `true`. Because
+  identity is derived solely from the token, there is no anonymous path — a deployment that sets
+  `require_auth:false` refuses to boot rather than pretend to honor it.
+- **Example buyer client + guide updated** to the token-only contract (identity via `token`, no
+  `buyer_id`).
+
+[Unreleased]: https://github.com/juan-sibbo/gam-seller-mcp-node/compare/v0.3.0...HEAD
 [0.3.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.3.0
 [0.2.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.2.0
 [0.1.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.1.0

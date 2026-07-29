@@ -13,6 +13,7 @@ import { generateDevKeyPair, type KeyPairBundle } from "../src/identity/jwk.js";
 import { TokenIssuer } from "../src/identity/issuer.js";
 import { TokenValidator } from "../src/identity/validator.js";
 import { createMemoryDenylist } from "../src/identity/denylist.js";
+import { BUYER_ISS, BUYER_AUD } from "../src/identity/types.js";
 import { WellKnownService, WELL_KNOWN_PATH, WELL_KNOWN_CACHE_TTL_SECONDS } from "../src/discovery/well-known.js";
 import { TEST_DEPLOYMENT_CONFIG } from "../src/config/deployment.js";
 import { CatalogStore, TEST_CATALOG_CONFIG } from "../src/catalog/store.js";
@@ -81,15 +82,17 @@ describe("HTTP transport — E-12 canonical route + MCP endpoint", () => {
   let baseUrl: string;
   let wellKnown: WellKnownService;
   let keyPair: KeyPairBundle;
+  let issuer: TokenIssuer;
 
   beforeAll(async () => {
     keyPair = await generateDevKeyPair();
     const denylist = createMemoryDenylist();
     wellKnown = new WellKnownService(keyPair.privateKey, keyPair.publicKey, TEST_DEPLOYMENT_CONFIG);
+    issuer = new TokenIssuer(keyPair.privateKey);
     const deps = {
       store: new EntitlementStore(TEST_ENTITLEMENTS_DEMO_CONFIG),
-      issuer: new TokenIssuer(keyPair.privateKey),
-      validator: new TokenValidator(keyPair.publicKey, denylist),
+      issuer,
+      validator: new TokenValidator(keyPair.publicKey, denylist, BUYER_ISS, BUYER_AUD),
       wellKnown,
       catalog: new CatalogStore(TEST_CATALOG_CONFIG),
       pricingStore: new PricingStore(TEST_PRICING_CONFIG),
@@ -150,12 +153,12 @@ describe("HTTP transport — E-12 canonical route + MCP endpoint", () => {
     const tools = await client.listTools();
     expect(tools.tools.map((t) => t.name).sort()).toEqual(["discover_products", "get_forecast", "well_known_capabilities"]);
 
-    const ok = await client.callTool({ name: "discover_products", arguments: { buyer_id: ENTITLED_BUYER } });
+    const ok = await client.callTool({ name: "discover_products", arguments: { token: (await issuer.issue(ENTITLED_BUYER, BUYER_AUD)).token } });
     expect(ok.isError).toBeFalsy();
     const body = JSON.parse((ok.content as Array<{ text: string }>)[0].text);
     expect(Array.isArray(body.families)).toBe(true);
 
-    const denied = await client.callTool({ name: "discover_products", arguments: { buyer_id: UNKNOWN_BUYER } });
+    const denied = await client.callTool({ name: "discover_products", arguments: { token: (await issuer.issue(UNKNOWN_BUYER, BUYER_AUD)).token } });
     expect(denied.isError).toBe(true);
     expect(JSON.parse((denied.content as Array<{ text: string }>)[0].text).code).toBe("AUTH_FAILED");
 

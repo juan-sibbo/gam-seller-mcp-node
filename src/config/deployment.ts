@@ -32,6 +32,9 @@ export interface DeploymentConfig {
   controller_model: ControllerModel;
   controller_name: string;
   retention: RetentionConfig;
+  // v0.4 Bloque A: buyer surfaces require a valid buyer token; identity is derived from
+  // token.sub (there is no anonymous path). Declarative posture — see validation below.
+  require_auth: boolean;
 }
 
 const VALID_CONTROLLER_MODELS: ReadonlySet<string> = new Set(Object.values(ControllerModel));
@@ -70,11 +73,28 @@ export function validateDeploymentConfig(raw: unknown): DeploymentConfig {
     throw new Error("deployment config: retention.archive_months must be a positive integer");
   }
 
+  // require_auth — v0.4 Bloque A. Defaults to true (secure default) when absent.
+  // Fail-closed: require_auth:false is NOT supported. Buyer identity is derived from the
+  // token's sub; with no token there is no anonymous identity to serve, so disabling auth
+  // cannot open a usable path — it would only signal a dangerous misconfiguration. Refuse
+  // to boot rather than pretend to honor it (same posture as a placeholder dsr_contact).
+  const requireAuthRaw = cfg["require_auth"];
+  if (requireAuthRaw !== undefined && typeof requireAuthRaw !== "boolean") {
+    throw new Error("deployment config: require_auth must be a boolean");
+  }
+  const requireAuth = requireAuthRaw ?? true;
+  if (requireAuth === false) {
+    throw new Error(
+      "deployment config: require_auth:false is not supported — buyer identity is derived from the token (no anonymous path). Remove the flag or set it to true."
+    );
+  }
+
   return {
     dsr_contact: dsrContact,
     controller_model: controllerModel as ControllerModel,
     controller_name: controllerName,
     retention: { hot_days: hotDays, archive_months: archiveMonths },
+    require_auth: requireAuth,
   };
 }
 
@@ -92,4 +112,5 @@ export const TEST_DEPLOYMENT_CONFIG: DeploymentConfig = {
   controller_model: ControllerModel.OPERATOR,
   controller_name: "Sibbo (dev/demo deployment)",
   retention: { hot_days: 90, archive_months: 12 },
+  require_auth: true,
 };

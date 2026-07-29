@@ -257,14 +257,16 @@ def run_probe(base_url: str) -> None:
             else:
                 fail("JWS shape", f"expected 3 parts, got {len(jws_parts)}: {doc_text[:60]!r}")
 
-    # ── 5: Default-Deny — unknown buyer → AUTH_FAILED ─────────────────────────
-    print("5. Default-Deny: unknown buyer → AUTH_FAILED …")
+    # ── 5: Default-Deny — no buyer token → AUTH_FAILED ────────────────────────
+    # v0.4 Bloque A: identity is derived from a buyer token's sub (no buyer_id argument).
+    # A call with no token has no derivable identity → Default-Deny.
+    print("5. Default-Deny: no buyer token → AUTH_FAILED …")
     _, deny_parsed, _ = _mcp_post(
         base_url + MCP_PATH,
         {
             "jsonrpc": "2.0",
             "method": "tools/call",
-            "params": {"name": "discover_products", "arguments": {"buyer_id": UNKNOWN_BUYER}},
+            "params": {"name": "discover_products", "arguments": {}},
             "id": 3,
         },
         session_id=session_id,
@@ -280,13 +282,13 @@ def run_probe(base_url: str) -> None:
                 deny_doc = json.loads(deny_text)
                 code = deny_doc.get("code", "")
                 if code == "AUTH_FAILED":
-                    ok("AUTH_FAILED received for unknown buyer (Default-Deny ✓)")
+                    ok("AUTH_FAILED received for a call with no token (Default-Deny ✓)")
                 else:
                     fail("error code", f"expected AUTH_FAILED, got {code!r}")
             except json.JSONDecodeError:
                 fail("deny response parse", deny_text[:100])
         else:
-            fail("Default-Deny", "expected isError=true for unknown buyer, got success")
+            fail("Default-Deny", "expected isError=true for a call with no token, got success")
 
     _report(failures)
 

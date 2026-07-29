@@ -39,10 +39,15 @@ console.log("node_id:", jwsPayload.node_id);
 console.log("privacy_posture:", jwsPayload.privacy_posture);
 // Verify: privacy_posture.end_user_personal_data must be "none"
 
+// Your identity is derived from a buyer bearer token (aud=seller-mcp-node) issued to you
+// by the node operator (scripts/issue-buyer-token.ts). There is NO buyer_id argument —
+// the node reads your identity from the token's `sub`, so you cannot act as another buyer.
+const token = process.env.SELLER_MCP_BUYER_TOKEN;  // provisioned out of band
+
 // 2. Discover available product families
 const disc = await client.callTool({
   name: "discover_products",
-  arguments: { buyer_id: "my-org-buyer-id" },
+  arguments: { token },
 });
 const { families } = JSON.parse(disc.content[0].text);
 // families: [{ family_id, label, pricing_options? }, ...]
@@ -52,7 +57,7 @@ for (const family of families) {
   const fc = await client.callTool({
     name: "get_forecast",
     arguments: {
-      buyer_id: "my-org-buyer-id",
+      token,
       family_id: family.family_id,
       period: "2026-Q4",
     },
@@ -81,7 +86,7 @@ Decode the middle segment (base64url) to get the capability document:
 ```json
 {
   "node_id": "gam-seller-mcp-...",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "posture": "audience_blind",
   "capability_families": ["display-ros", "video-pre-roll", "branded-content"],
   "privacy_posture": {
@@ -143,8 +148,8 @@ Possible codes:
 
 | Code | Meaning |
 |------|---------|
-| `AUTH_FAILED` | Not entitled, token invalid, or buyer unknown |
-| `RATE_LIMITED` | Exceeded N=1/T=30s per buyer_id |
+| `AUTH_FAILED` | Missing/invalid/revoked token, or the token's buyer is not entitled |
+| `RATE_LIMITED` | Exceeded N=1/T=30s per buyer (identity from token.sub) |
 | `INVALID_REQUEST` | Replay detected (duplicate client_request_id) |
 
 Error responses are deliberately opaque: `AUTH_FAILED` covers all denial reasons to prevent
@@ -158,7 +163,7 @@ To use the replay-detection feature, include a `client_request_id` in your tool 
 await client.callTool({
   name: "discover_products",
   arguments: {
-    buyer_id: "my-org-buyer-id",
+    token,
     client_request_id: crypto.randomUUID(),  // unique per call
   },
 });
