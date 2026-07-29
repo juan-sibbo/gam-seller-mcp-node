@@ -16,6 +16,7 @@ export const MetricTool = {
   WELL_KNOWN_CAPABILITIES: "well_known_capabilities",
   DISCOVER_PRODUCTS: "discover_products",
   GET_FORECAST: "get_forecast",
+  CREATE_INTENT: "create_intent",
 } as const;
 export type MetricTool = (typeof MetricTool)[keyof typeof MetricTool];
 
@@ -24,6 +25,9 @@ export const ToolOutcome = {
   AUTH_FAILED: "auth_failed",
   RATE_LIMITED: "rate_limited",
   REPLAY_REJECTED: "replay_rejected",
+  // A well-formed request the node refuses on its merits (e.g. create_intent over a
+  // stale/non-matching firm price). Distinct from AUTH_FAILED: identity was fine.
+  INVALID_REQUEST: "invalid_request",
   INTERNAL_ERROR: "internal_error",
 } as const;
 export type ToolOutcome = (typeof ToolOutcome)[keyof typeof ToolOutcome];

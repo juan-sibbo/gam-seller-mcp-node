@@ -15,6 +15,7 @@ import { BUYER_ISS, BUYER_AUD } from "./identity/types.js";
 import { WellKnownService } from "./discovery/well-known.js";
 import { CatalogStore, loadCatalogFromFile } from "./catalog/store.js";
 import { PricingStore, loadPricingFromFile } from "./pricing/store.js";
+import { IntentStore } from "./intent/store.js";
 import { RateLimiter } from "./rate-limiter/limiter.js";
 import { ForecastEngine } from "./forecast/engine.js";
 import { loadDeploymentConfigFromFile } from "./config/deployment.js";
@@ -45,6 +46,11 @@ interface ServerDeps {
   forecastRateLimiter: RateLimiter;
   ledger: AuditLedger;
   replayGuard: ReplayGuard;
+  // Commitment store (v0.5 Bloque B). Optional for back-compat with existing buildServer
+  // call sites that predate create_intent; when absent a fresh per-server store is used.
+  // main() always passes ONE shared instance so intents survive across HTTP connections
+  // (buildServer is called per-connection) — the same reason ledger/replayGuard are shared.
+  intentStore?: IntentStore;
   // Optional operator metrics. When absent, every handler runs unchanged and no
   // series are recorded — observability is additive, never on the request's critical path.
   metricsRegistry?: MetricsRegistry;
@@ -52,6 +58,9 @@ interface ServerDeps {
 
 function buildServer(deps: ServerDeps): McpServer {
   const { store, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, metricsRegistry } = deps;
+  // Shared commitment store when provided (main() path); a per-server fallback keeps
+  // legacy call sites that never touch create_intent working unchanged.
+  const intentStore = deps.intentStore ?? new IntentStore();
   const policy = new PolicyEngine(store);
 
   // Record a handler's terminal outcome: the labelled call counter plus the current
@@ -121,6 +130,16 @@ function buildServer(deps: ServerDeps): McpServer {
   function replayResult(request_id: string) {
     // Generic message — a replayed request must not be distinguishable from any other
     // invalid request (soap-fault-redaction-signoff §2).
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(makeSafeError(ErrorCode.INVALID_REQUEST, "Invalid request.", request_id, CONTRACT_VERSION)) }],
+      isError: true,
+    };
+  }
+
+  function invalidRequestResult(request_id: string) {
+    // Generic message — a fail-closed price rejection must not leak the real firm price
+    // or whether the family exists (soap-fault-redaction-signoff §2). Same envelope as
+    // replayResult by design: the buyer cannot distinguish the reason.
     return {
       content: [{ type: "text" as const, text: JSON.stringify(makeSafeError(ErrorCode.INVALID_REQUEST, "Invalid request.", request_id, CONTRACT_VERSION)) }],
       isError: true,
@@ -279,6 +298,90 @@ function buildServer(deps: ServerDeps): McpServer {
     }
   );
 
+  // Commitment primitive — plan-core-v04 §3 (Bloque B, v0.5). Registers that an
+  // AUTHENTICATED buyer expresses firm intent over a product at its CURRENT firm price,
+  // with a TTL. NOT a GAM order nor a real inventory hold (SOFT_LOCK_* deferred to Tier 2)
+  // — it is the A′-compatible handoff artifact the classic rails pick up. Zero GAM.
+  // Order mirrors the read tools: replay → token auth → policy → firm-price fail-closed → emit.
+  server.tool(
+    "create_intent",
+    "Register a firm buying intent over a product family at its current firm price (soft commitment with TTL). Not a GAM order or inventory hold.",
+    {
+      family_id: z.string().describe("Product family ID from discover_products"),
+      period: z.string().describe("Target period (e.g. Q4-2026, 2026-10)"),
+      price_ref: z.number().describe("The firm list price the buyer commits to; must match the family's current firm price"),
+      token: z.string().optional().describe("Buyer bearer JWT (RS256, aud=seller-mcp-node). Identity is derived from token.sub."),
+      client_request_id: z.string().optional().describe("Client-supplied idempotency key for replay detection"),
+    },
+    async ({ family_id, period, price_ref, token, client_request_id }) => {
+      const request_id = randomUUID();
+
+      // Replay check first (SEC-GATE-3) — a replayed create_intent must never create a
+      // second commitment. Request-level dedupe IS the write's idempotency guarantee.
+      if (client_request_id !== undefined) {
+        if (replayGuard.isReplay(client_request_id)) {
+          metricsRegistry?.increment("mcp_replay_rejected_total", { tool: MetricTool.CREATE_INTENT });
+          recordOutcome(MetricTool.CREATE_INTENT, ToolOutcome.REPLAY_REJECTED);
+          return replayResult(request_id);
+        }
+        replayGuard.record(client_request_id);
+      }
+
+      // Identity derived from the token (Bloque A) — buyer_id is token.sub, never input.
+      const auth = await authenticate(token, AllowedSurface.INTENT, request_id);
+      if (!auth) {
+        metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.CREATE_INTENT, reason: AuthFailReason.TOKEN_INVALID });
+        recordOutcome(MetricTool.CREATE_INTENT, ToolOutcome.AUTH_FAILED);
+        return authFailedResult(request_id);
+      }
+      const buyer_id = auth.buyer_id;
+
+      if (!resolveScope(buyer_id, AllowedSurface.INTENT, request_id)) {
+        metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.CREATE_INTENT, reason: AuthFailReason.SCOPE_DENIED });
+        recordOutcome(MetricTool.CREATE_INTENT, ToolOutcome.AUTH_FAILED);
+        return authFailedResult(request_id);
+      }
+
+      // Fail-closed on a stale or non-matching firm price (plan §3): priceFor returns
+      // undefined when the family is unknown OR its firm price has expired — never commit
+      // over a stale offer. A mismatched price_ref is rejected identically, with the same
+      // generic envelope, so neither the real price nor the family's existence leaks.
+      const price = pricingStore.priceFor(family_id);
+      if (!price || price.list_price !== price_ref) {
+        recordOutcome(MetricTool.CREATE_INTENT, ToolOutcome.INVALID_REQUEST);
+        return invalidRequestResult(request_id);
+      }
+
+      const intent = intentStore.create({
+        buyer_id,
+        family_id,
+        period,
+        firm_price: price.list_price,
+        currency: price.currency,
+        price_valid_until: price.valid_until,
+      });
+
+      // INTENT_CREATED — class already ratified (event.ts:11). Payload is minimized: no
+      // firm_price (exact pricing stays out of the ledger — KANON §Logs-y-Audit) and no
+      // cross-buyer data. The ledger pseudonymizes buyer_id before hashing.
+      ledger.append(
+        EventClass.INTENT_CREATED,
+        { intent_id: intent.intent_id, family_id, period, expires_at: intent.expires_at },
+        { buyer_id, request_id }
+      );
+      recordOutcome(MetricTool.CREATE_INTENT, ToolOutcome.SUCCESS);
+      return {
+        content: [{ type: "text", text: JSON.stringify({
+          intent_id: intent.intent_id,
+          status: intent.status,
+          firm_price: intent.firm_price,
+          expires_at: intent.expires_at,
+          request_id,
+        }) }],
+      };
+    }
+  );
+
   return server;
 }
 
@@ -321,6 +424,9 @@ async function main() {
   const forecastEngine = new ForecastEngine();
   const forecastRateLimiter = new RateLimiter();
   const replayGuard = new ReplayGuard();
+  // Shared commitment store (v0.5 Bloque B) — one instance for the whole process so
+  // intents survive across HTTP connections (buildServer runs per-connection).
+  const intentStore = new IntentStore();
   // Shared metrics registry — the same instance backs both the tool handlers and the
   // /metrics HTTP route, so counters recorded in-handler are visible at scrape time.
   const metricsRegistry = new MetricsRegistry();
@@ -343,7 +449,7 @@ async function main() {
   runRetentionCycle(retention, ledger, Date.now(), pseudonyms);
   setInterval(() => runRetentionCycle(retention, ledger, Date.now(), pseudonyms), RETENTION_INTERVAL_MS).unref();
 
-  const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, metricsRegistry };
+  const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, intentStore, metricsRegistry };
 
   // Fase A: --http serves StreamableHTTP on 127.0.0.1 (external bind = infra act, #8/#10).
   // Default remains stdio for MCP-host usage.
