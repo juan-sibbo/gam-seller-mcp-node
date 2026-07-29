@@ -10,6 +10,7 @@ import { ErrorCode, makeSafeError } from "./errors/envelope.js";
 import { loadOrCreateKeyPair } from "./identity/keystore.js";
 import { TokenIssuer } from "./identity/issuer.js";
 import { TokenValidator } from "./identity/validator.js";
+import { DOMAIN2_ISS, BUYER_AUD } from "./identity/types.js";
 import { Denylist, DEV_DENYLIST_PATH } from "./identity/denylist.js";
 import { WellKnownService } from "./discovery/well-known.js";
 import { CatalogStore, loadCatalogFromFile } from "./catalog/store.js";
@@ -33,6 +34,14 @@ interface ServerDeps {
   store: EntitlementStore;
   issuer: TokenIssuer;
   validator: TokenValidator;
+  // Buyer→node axis validator (aud=seller-mcp-node). Optional for back-compat: when
+  // absent, authenticate() falls back to `validator` and preserves legacy behaviour.
+  // main() and the auth-binding tests wire it explicitly (BLOQUEANTE 1).
+  buyerValidator?: TokenValidator;
+  // When true, buyer surfaces require a valid bound token (A3). Defaults to false at the
+  // buildServer level so existing dev/test call sites stay open; the real deployment sets
+  // it true via deployment.json (secure default there).
+  requireAuth?: boolean;
   wellKnown: WellKnownService;
   catalog: CatalogStore;
   pricingStore: PricingStore;
@@ -48,6 +57,9 @@ interface ServerDeps {
 
 function buildServer(deps: ServerDeps): McpServer {
   const { store, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, metricsRegistry } = deps;
+  // Buyer axis: dedicated validator when provided, else fall back to the domain-2 one.
+  const buyerValidator = deps.buyerValidator ?? validator;
+  const requireAuth = deps.requireAuth ?? false;
   const policy = new PolicyEngine(store);
 
   // Record a handler's terminal outcome: the labelled call counter plus the current
@@ -63,23 +75,39 @@ function buildServer(deps: ServerDeps): McpServer {
     version: CONTRACT_VERSION,
   });
 
-  // Validate an optional domain-2 token and audit the outcome.
-  // Revocation or invalid token → AUTH_FAILED (soap-fault-redaction-signoff §4 Option A).
-  // Emits BUYER_AUTHENTICATION (decision-package Bloque 2 §2.4) — the ledger pseudonymizes buyer_id.
+  // Authenticate a buyer request and bind the principal to the resource (BLOQUEANTE 1).
+  // Returns the AUTHORITATIVE buyer_id (derived from token.sub), or null on any failure.
+  // The input buyer_id is NEVER trusted as identity: when a token is present it must match
+  // token.sub, otherwise the request is a masquerade and is denied. Revocation/invalid/aud
+  // mismatch → deny (soap-fault-redaction-signoff §4 Option A). Emits BUYER_AUTHENTICATION
+  // (decision-package Bloque 2 §2.4) — the ledger pseudonymizes buyer_id.
   async function authenticate(
     token: string | undefined,
     buyer_id: string,
     surface: AllowedSurface,
     request_id: string
-  ): Promise<boolean> {
-    if (!token) return true; // token optional in dev context — policy still gates below
-    const validation = await validator.validate(token);
+  ): Promise<{ buyer_id: string } | null> {
+    if (!token) {
+      if (!requireAuth) return { buyer_id }; // dev/back-compat: no enforcement, input stands
+      // Fail-closed: a required token is absent — deny before policy even runs.
+      ledger.append(
+        EventClass.BUYER_AUTHENTICATION,
+        { outcome: "deny", surface },
+        { buyer_id, request_id }
+      );
+      return null;
+    }
+    const validation = await buyerValidator.validate(token);
+    // Binding: a valid token whose subject differs from the requested buyer_id is an
+    // impersonation attempt — treated exactly like an invalid token (no distinguishable signal).
+    const bound = validation.valid && validation.claims?.sub === buyer_id;
     ledger.append(
       EventClass.BUYER_AUTHENTICATION,
-      { outcome: validation.valid ? "allow" : "deny", surface },
+      { outcome: bound ? "allow" : "deny", surface },
       { buyer_id, request_id }
     );
-    return validation.valid;
+    if (!bound) return null;
+    return { buyer_id: validation.claims!.sub };
   }
 
   // Run the Policy Engine and audit the decision.
@@ -167,22 +195,25 @@ function buildServer(deps: ServerDeps): McpServer {
         replayGuard.record(client_request_id);
       }
 
-      // authenticate() returns false only when a token is present and invalid — so a
-      // failure here is specifically a bad/revoked token, not a policy denial.
-      if (!(await authenticate(token, buyer_id, AllowedSurface.PRODUCT_DISCOVERY, request_id))) {
+      // authenticate() returns null on missing-required/invalid/revoked/impersonating token.
+      // On success it yields the AUTHORITATIVE buyer_id (token.sub), used from here on —
+      // the input buyer_id is never trusted as identity past this point.
+      const auth = await authenticate(token, buyer_id, AllowedSurface.PRODUCT_DISCOVERY, request_id);
+      if (!auth) {
         metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.DISCOVER_PRODUCTS, reason: AuthFailReason.TOKEN_INVALID });
         recordOutcome(MetricTool.DISCOVER_PRODUCTS, ToolOutcome.AUTH_FAILED);
         return authFailedResult(request_id);
       }
+      const authBuyerId = auth.buyer_id;
 
-      if (!resolveScope(buyer_id, AllowedSurface.PRODUCT_DISCOVERY, request_id)) {
+      if (!resolveScope(authBuyerId, AllowedSurface.PRODUCT_DISCOVERY, request_id)) {
         metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.DISCOVER_PRODUCTS, reason: AuthFailReason.SCOPE_DENIED });
         recordOutcome(MetricTool.DISCOVER_PRODUCTS, ToolOutcome.AUTH_FAILED);
         return authFailedResult(request_id);
       }
 
       // Rate limit check — N=1/T=30s per buyer_id (blocker-#6 §4 RATIFIED).
-      if (!rateLimiter.check(buyer_id)) {
+      if (!rateLimiter.check(authBuyerId)) {
         metricsRegistry?.increment("mcp_rate_limited_total", { tool: MetricTool.DISCOVER_PRODUCTS });
         recordOutcome(MetricTool.DISCOVER_PRODUCTS, ToolOutcome.RATE_LIMITED);
         return rateLimitedResult(request_id);
@@ -193,7 +224,7 @@ function buildServer(deps: ServerDeps): McpServer {
       // SEC-GATE-13 bisturí: attach firm list price when available. Only the uniform list price
       // is exposed — per-buyer pricing would collapse into commercial intelligence and must not
       // land here without reopening SEC-GATE-13 (DP-AB-01 §3/§5.1, authorized 07/07/26).
-      const families = catalog.discover(buyer_id).map((f) => {
+      const families = catalog.discover(authBuyerId).map((f) => {
         const price = pricingStore.priceFor(f.family_id);
         if (!price) return f;
         return {
@@ -233,20 +264,22 @@ function buildServer(deps: ServerDeps): McpServer {
         replayGuard.record(client_request_id);
       }
 
-      if (!(await authenticate(token, buyer_id, AllowedSurface.FORECAST, request_id))) {
+      const auth = await authenticate(token, buyer_id, AllowedSurface.FORECAST, request_id);
+      if (!auth) {
         metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.GET_FORECAST, reason: AuthFailReason.TOKEN_INVALID });
         recordOutcome(MetricTool.GET_FORECAST, ToolOutcome.AUTH_FAILED);
         return authFailedResult(request_id);
       }
+      const authBuyerId = auth.buyer_id;
 
-      if (!resolveScope(buyer_id, AllowedSurface.FORECAST, request_id)) {
+      if (!resolveScope(authBuyerId, AllowedSurface.FORECAST, request_id)) {
         metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.GET_FORECAST, reason: AuthFailReason.SCOPE_DENIED });
         recordOutcome(MetricTool.GET_FORECAST, ToolOutcome.AUTH_FAILED);
         return authFailedResult(request_id);
       }
 
       // Separate rate limiter for forecast — N=1/T=30s (blocker-#6 §4 RATIFIED).
-      if (!forecastRateLimiter.check(buyer_id)) {
+      if (!forecastRateLimiter.check(authBuyerId)) {
         metricsRegistry?.increment("mcp_rate_limited_total", { tool: MetricTool.GET_FORECAST });
         recordOutcome(MetricTool.GET_FORECAST, ToolOutcome.RATE_LIMITED);
         return rateLimitedResult(request_id);
@@ -258,7 +291,7 @@ function buildServer(deps: ServerDeps): McpServer {
       ledger.append(
         EventClass.FORECAST_REQUEST,
         { family_id, period, bucket: result.bucket, synthetic: true },
-        { buyer_id, request_id }
+        { buyer_id: authBuyerId, request_id }
       );
       recordOutcome(MetricTool.GET_FORECAST, ToolOutcome.SUCCESS);
       return { content: [{ type: "text", text: JSON.stringify({ ...result, request_id }) }] };
@@ -292,6 +325,8 @@ async function main() {
   const denylist = new Denylist(DEV_DENYLIST_PATH);
   const issuer = new TokenIssuer(keyPair.privateKey);
   const validator = new TokenValidator(keyPair.publicKey, denylist);
+  // Buyer→node axis validator (BLOQUEANTE 1): same key, audience = the node itself.
+  const buyerValidator = new TokenValidator(keyPair.publicKey, denylist, DOMAIN2_ISS, BUYER_AUD);
   const wellKnown = new WellKnownService(keyPair.privateKey, keyPair.publicKey, deployment);
   // Fail-closed: an invalid entitlements config (unknown surface, empty buyer_id) must
   // prevent startup — loadEntitlementsFromFile throws before anything serves. The persistent
@@ -327,7 +362,7 @@ async function main() {
   runRetentionCycle(retention, ledger, Date.now(), pseudonyms);
   setInterval(() => runRetentionCycle(retention, ledger, Date.now(), pseudonyms), RETENTION_INTERVAL_MS).unref();
 
-  const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, metricsRegistry };
+  const deps: ServerDeps = { store, issuer, validator, buyerValidator, requireAuth: deployment.require_auth, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, metricsRegistry };
 
   // Fase A: --http serves StreamableHTTP on 127.0.0.1 (external bind = infra act, #8/#10).
   // Default remains stdio for MCP-host usage.

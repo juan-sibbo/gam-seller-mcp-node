@@ -32,6 +32,10 @@ export interface DeploymentConfig {
   controller_model: ControllerModel;
   controller_name: string;
   retention: RetentionConfig;
+  // BLOQUEANTE 1 (A3): when true, buyer surfaces require a valid bound token — a request
+  // without one is denied. Secure default: a config that omits it is treated as true
+  // (fail-closed), so a deployment can only run open by explicitly opting out.
+  require_auth: boolean;
 }
 
 const VALID_CONTROLLER_MODELS: ReadonlySet<string> = new Set(Object.values(ControllerModel));
@@ -70,11 +74,19 @@ export function validateDeploymentConfig(raw: unknown): DeploymentConfig {
     throw new Error("deployment config: retention.archive_months must be a positive integer");
   }
 
+  // Fail-closed default: omitted → true. Present → must be a boolean.
+  const requireAuthRaw = cfg["require_auth"];
+  if (requireAuthRaw !== undefined && typeof requireAuthRaw !== "boolean") {
+    throw new Error("deployment config: require_auth must be a boolean when present");
+  }
+  const requireAuth = requireAuthRaw === undefined ? true : requireAuthRaw;
+
   return {
     dsr_contact: dsrContact,
     controller_model: controllerModel as ControllerModel,
     controller_name: controllerName,
     retention: { hot_days: hotDays, archive_months: archiveMonths },
+    require_auth: requireAuth,
   };
 }
 
@@ -92,4 +104,5 @@ export const TEST_DEPLOYMENT_CONFIG: DeploymentConfig = {
   controller_model: ControllerModel.OPERATOR,
   controller_name: "Sibbo (dev/demo deployment)",
   retention: { hot_days: 90, archive_months: 12 },
+  require_auth: true,
 };
