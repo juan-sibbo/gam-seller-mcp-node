@@ -1,6 +1,7 @@
 import { createHmac, randomBytes } from "crypto";
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { dirname } from "path";
+import { dataPath } from "../config/paths.js";
 
 // Buyer pseudonymization for the audit ledger — gdpr-analysis §Q1.2 + acts A1 (05/07/26).
 //
@@ -167,7 +168,7 @@ export class PseudonymService {
   }
 }
 
-export const DEV_PSEUDONYM_KEYS_PATH = "./data/pseudonym-keys.json";
+export const DEV_PSEUDONYM_KEYS_PATH = dataPath("pseudonym-keys.json");
 
 export function createMemoryPseudonyms(): PseudonymService {
   return new PseudonymService(null);

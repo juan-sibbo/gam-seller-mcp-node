@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { dirname } from "path";
+import { dataPath } from "../config/paths.js";
 import type { AuditEvent } from "./event.js";
 import { EventClass } from "./event.js";
 import type { AuditLedger } from "./ledger.js";
@@ -134,7 +135,7 @@ export class RetentionService {
   }
 }
 
-export const DEV_ARCHIVE_PATH = "./data/ledger-archive.json";
+export const DEV_ARCHIVE_PATH = dataPath("ledger-archive.json");
 
 // Full lifetime of a recoverable ledger entry: while it is hot (hot_days) plus while
 // it sits in the archive with its payload intact (archive_months). Past this horizon

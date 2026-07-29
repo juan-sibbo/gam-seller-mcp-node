@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { dirname } from "path";
+import { dataPath } from "../config/paths.js";
 
 // Durable denylist for JWT jti revocation — domain2-identity-signoff §4b + §6.
 // Domain-2 revocation SLO ≤ 15 min: denylist must propagate within that window.
@@ -109,7 +110,7 @@ export class Denylist {
 }
 
 // Default paths for dev — gitignored directories
-export const DEV_DENYLIST_PATH = "./data/denylist.json";
+export const DEV_DENYLIST_PATH = dataPath("denylist.json");
 
 // In-memory-only denylist (for tests — no disk I/O)
 export function createMemoryDenylist(): Denylist {

@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { dirname } from "path";
+import { dataPath } from "../config/paths.js";
 import type { EventClass } from "./event.js";
 import { hashEntry, verifyEntryHash, type AuditEvent } from "./event.js";
 import { PseudonymService, createMemoryPseudonyms } from "./pseudonym.js";
@@ -23,6 +24,11 @@ export class AuditLedger {
   private readonly pseudonyms: PseudonymService;
   private baseSeq = 0;
   private carryPrevHash = "";
+  // Durability health (v0.6 hardening E1). A failed disk write means an appended entry
+  // lives only in memory and is lost on restart — a silent integrity loss for a
+  // tamper-evident ledger. save() used to swallow that as a benign WARNING; now it flips
+  // this flag so the degradation is observable (e.g. by a health probe) instead of hidden.
+  private persistenceHealthy = true;
 
   constructor(persistPath: string | null = null, pseudonyms?: PseudonymService) {
     this.persistPath = persistPath;
@@ -94,6 +100,12 @@ export class AuditLedger {
     return this.entries.length;
   }
 
+  // True while every disk write has succeeded; false once a persist has failed (see save()).
+  // In-memory ledgers (no persistPath) are always healthy — there is nothing to fail.
+  isPersistenceHealthy(): boolean {
+    return this.persistenceHealthy;
+  }
+
   // Full chain replay — verifies every entry hash and prev_hash linkage.
   // Returns true only if the entire chain is internally consistent.
   // decision-package Bloque 2 §2.3: head-hash-first, then full replay.
@@ -147,8 +159,13 @@ export class AuditLedger {
     try {
       mkdirSync(dirname(this.persistPath), { recursive: true });
       writeFileSync(this.persistPath, JSON.stringify(this.entries, null, 2), "utf-8");
-    } catch {
-      process.stderr.write("[audit] WARNING: could not persist ledger to disk\n");
+      this.persistenceHealthy = true;
+    } catch (err) {
+      // Do NOT swallow: a lost audit write is an integrity event, not a benign warning.
+      // Flip the health flag (observable) and emit at ERROR severity with the cause.
+      this.persistenceHealthy = false;
+      const reason = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[audit] ERROR: could not persist ledger to disk — durability DEGRADED (${reason})\n`);
     }
   }
 }
@@ -157,4 +174,4 @@ export function createMemoryLedger(pseudonyms?: PseudonymService): AuditLedger {
   return new AuditLedger(null, pseudonyms);
 }
 
-export const DEV_LEDGER_PATH = "./data/audit-ledger.json";
+export const DEV_LEDGER_PATH = dataPath("audit-ledger.json");
