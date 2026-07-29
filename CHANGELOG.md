@@ -164,6 +164,36 @@ amendment (new `INTENT` surface) before it can land.
 - **Example buyer client + guide updated** to the token-only contract (identity via `token`, no
   `buyer_id`).
 
+## [0.5.0] — 2026-07-29
+
+Fifth release. The theme is **commitment — the engine reaches B**: an authenticated buyer can
+now turn a firm offer into a recorded, per-buyer commitment. This closes the second and last
+Tier-0 "engine" blocker. With identity (v0.4) and commitment (this release) in place, the core
+seller-agent loop — authenticate → discover with price → commit — no longer has a broken part.
+
+### Commitment primitive — `create_intent`
+
+- **New `create_intent` tool.** An authenticated buyer registers a firm intent over a product
+  family at its current firm price, with a TTL. It is **not** a GAM order nor a real inventory
+  hold (`SOFT_LOCK_*` stays deferred to the future GAM tier) — it is the A′-compatible handoff
+  artifact the classic direct-deal rails pick up. Zero GAM. Additive: existing tools are
+  unchanged, so the buyer contract version stays `0.2.0`.
+- **Identity from the token only.** Like the read tools, the committing buyer is the `sub` of a
+  validated buyer token; there is no `buyer_id` input to spoof.
+- **Fail-closed on a stale offer.** The intent is refused (generic `INVALID_REQUEST`) if the
+  firm price is unknown, expired, or does not match the buyer's `price_ref` — a commitment is
+  never recorded over a stale or misquoted offer, and neither the real price nor the family's
+  existence leaks.
+- **Per-buyer, never cross-buyer.** Intents are write-your-own and read-your-own; a buyer can
+  never read or affect another buyer's intent (`cross_buyer_state` stays denied). The intent's
+  TTL is capped at the firm price's own validity.
+- **Auditable and minimized.** A valid commitment emits the already-ratified `INTENT_CREATED`
+  event; the payload carries no exact price and the ledger pseudonymizes the buyer.
+- **Idempotent writes.** A replayed `client_request_id` never records a second commitment.
+- **Governance.** The new `INTENT` surface was added to the adapter-boundary allowlist by a
+  ratified amendment (owner+security, 2026-07-29); the denylist is unchanged and still prevails.
+
+[0.5.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.5.0
 [0.4.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.4.0
 [0.3.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.3.0
 [0.2.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.2.0
