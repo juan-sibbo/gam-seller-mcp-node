@@ -12,6 +12,9 @@
 
 import { decodeJwt } from "jose";
 import { Denylist, DEV_DENYLIST_PATH } from "../src/identity/denylist.js";
+import { AuditLedger, DEV_LEDGER_PATH } from "../src/audit/ledger.js";
+import { PseudonymService, DEV_PSEUDONYM_KEYS_PATH } from "../src/audit/pseudonym.js";
+import { recordTokenRevocation } from "../src/identity/token-audit.js";
 
 function usage(): never {
   process.stderr.write(
@@ -26,6 +29,8 @@ if (args.length === 0) usage();
 
 let jti: string;
 let expiresAtMs: number;
+// Known only on the token path (from the token's sub); the --jti path has no buyer identity.
+let buyerId: string | undefined;
 
 if (args[0] === "--jti") {
   const [, j, expStr] = args;
@@ -41,10 +46,17 @@ if (args[0] === "--jti") {
   }
   jti = payload.jti;
   expiresAtMs = payload.exp * 1000;
+  buyerId = typeof payload.sub === "string" ? payload.sub : undefined;
 }
 
 const denylist = new Denylist(DEV_DENYLIST_PATH);
 denylist.add(jti, expiresAtMs);
+
+// Audit the revocation (v0.6 hardening C) — a security-critical act that previously left no
+// ledger trail. Same persistent ledger + pseudonym keys as the server.
+const ledger = new AuditLedger(DEV_LEDGER_PATH, new PseudonymService(DEV_PSEUDONYM_KEYS_PATH));
+recordTokenRevocation(ledger, { jti, expires_at_ms: expiresAtMs, buyer_id: buyerId });
+
 process.stderr.write(
   `[revoke] jti=${jti} revoked until ${new Date(expiresAtMs).toISOString()} (denylist size=${denylist.size()})\n`
 );
