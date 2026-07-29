@@ -7,9 +7,12 @@
 // families, and (3) pull a coarse availability forecast — all read-only, all subject to the
 // node's Default-Deny gate.
 //
-// Out of scope here (by design, tracked for the full SDK #5): Domain-2 JWT minting (the
-// `token` argument is optional; dev deployments accept entitled buyers without it), JWS
-// signature verification against the node's JWKS, retries/backoff, and a Python twin.
+// Out of scope here (by design, tracked for the full SDK #5): buyer token minting (obtain
+// one from the node operator via scripts/issue-buyer-token.ts), JWS signature verification
+// against the node's JWKS, retries/backoff, and a Python twin.
+//
+// v0.4 Bloque A: the buyer's identity is derived from its bearer token's `sub` — there is
+// no buyer_id argument. Pass the token at construction (default for every call) or per call.
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -53,7 +56,8 @@ export interface ForecastResult {
 }
 
 export interface CallOptions {
-  /** Domain-2 inter-service JWT (RS256). Optional for dev deployments. */
+  /** Buyer bearer JWT (RS256, aud=seller-mcp-node). Overrides the client's default token.
+   *  Required by the node — identity is derived from token.sub. */
   token?: string;
   /** Idempotency key for the node's replay detection (SEC-GATE-3). */
   clientRequestId?: string;
@@ -74,15 +78,20 @@ export class BuyerAccessError extends Error {
 export interface BuyerClientInfo {
   name?: string;
   version?: string;
+  /** Default buyer bearer JWT (aud=seller-mcp-node) sent on every call unless a call
+   *  supplies its own. The node derives the buyer identity from this token's sub. */
+  token?: string;
 }
 
 export class SellerMcpBuyerClient {
   private readonly client: Client;
   private readonly endpoint: URL;
+  private readonly defaultToken?: string;
   private connected = false;
 
   constructor(baseUrl: string, info: BuyerClientInfo = {}) {
     this.endpoint = new URL(MCP_PATH, baseUrl.endsWith("/") ? baseUrl : baseUrl + "/");
+    this.defaultToken = info.token;
     this.client = new Client({
       name: info.name ?? "seller-mcp-buyer-client",
       version: info.version ?? "0.1.0",
@@ -109,22 +118,20 @@ export class SellerMcpBuyerClient {
     return decodeJwsPayload<Capabilities>(text);
   }
 
-  async discoverProducts(buyerId: string, opts: CallOptions = {}): Promise<ProductFamily[]> {
-    const text = await this.callToolText("discover_products", { buyer_id: buyerId, ...argsFrom(opts) });
+  async discoverProducts(opts: CallOptions = {}): Promise<ProductFamily[]> {
+    const text = await this.callToolText("discover_products", argsFrom(opts, this.defaultToken));
     return (JSON.parse(text) as { families: ProductFamily[] }).families;
   }
 
   async getForecast(
-    buyerId: string,
     familyId: string,
     period: string,
     opts: CallOptions = {}
   ): Promise<ForecastResult> {
     const text = await this.callToolText("get_forecast", {
-      buyer_id: buyerId,
       family_id: familyId,
       period,
-      ...argsFrom(opts),
+      ...argsFrom(opts, this.defaultToken),
     });
     return JSON.parse(text) as ForecastResult;
   }
@@ -144,9 +151,10 @@ export class SellerMcpBuyerClient {
   }
 }
 
-function argsFrom(opts: CallOptions): Record<string, unknown> {
+function argsFrom(opts: CallOptions, defaultToken?: string): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  if (opts.token) out["token"] = opts.token;
+  const token = opts.token ?? defaultToken;
+  if (token) out["token"] = token;
   if (opts.clientRequestId) out["client_request_id"] = opts.clientRequestId;
   return out;
 }

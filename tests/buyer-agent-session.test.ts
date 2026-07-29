@@ -9,6 +9,7 @@ import { generateDevKeyPair, type KeyPairBundle } from "../src/identity/jwk.js";
 import { TokenIssuer } from "../src/identity/issuer.js";
 import { TokenValidator } from "../src/identity/validator.js";
 import { createMemoryDenylist } from "../src/identity/denylist.js";
+import { BUYER_ISS, BUYER_AUD } from "../src/identity/types.js";
 import { WellKnownService } from "../src/discovery/well-known.js";
 import { TEST_DEPLOYMENT_CONFIG } from "../src/config/deployment.js";
 import { CatalogStore, TEST_CATALOG_CONFIG } from "../src/catalog/store.js";
@@ -34,8 +35,15 @@ const KNOWN_FAMILY = "display-ros";
 let httpServer: Server;
 let baseUrl: string;
 let keyPair: KeyPairBundle;
+let issuer: TokenIssuer;
 let rateLimiter: RateLimiter;
 let forecastRateLimiter: RateLimiter;
+
+// v0.4 Bloque A: identity is derived from a buyer token's sub — no buyer_id input.
+async function mintToken(buyer_id: string): Promise<string> {
+  const { token } = await issuer.issue(buyer_id, BUYER_AUD);
+  return token;
+}
 
 beforeAll(async () => {
   keyPair = await generateDevKeyPair();
@@ -43,10 +51,11 @@ beforeAll(async () => {
   const wellKnown = new WellKnownService(keyPair.privateKey, keyPair.publicKey, TEST_DEPLOYMENT_CONFIG);
   rateLimiter = new RateLimiter();
   forecastRateLimiter = new RateLimiter();
+  issuer = new TokenIssuer(keyPair.privateKey);
   const deps = {
     store: new EntitlementStore(TEST_ENTITLEMENTS_DEMO_CONFIG),
-    issuer: new TokenIssuer(keyPair.privateKey),
-    validator: new TokenValidator(keyPair.publicKey, denylist),
+    issuer,
+    validator: new TokenValidator(keyPair.publicKey, denylist, BUYER_ISS, BUYER_AUD),
     wellKnown,
     catalog: new CatalogStore(TEST_CATALOG_CONFIG),
     pricingStore: new PricingStore(TEST_PRICING_CONFIG),
@@ -131,7 +140,7 @@ describe("D9 — complete buyer agent session (well_known → discover → forec
     const client = await connectClient();
     const result = await client.callTool({
       name: "discover_products",
-      arguments: { buyer_id: ENTITLED_BUYER },
+      arguments: { token: await mintToken(ENTITLED_BUYER) },
     });
 
     expect(result.isError).toBeFalsy();
@@ -172,7 +181,7 @@ describe("D9 — complete buyer agent session (well_known → discover → forec
     const client = await connectClient();
     const result = await client.callTool({
       name: "get_forecast",
-      arguments: { buyer_id: ENTITLED_BUYER, family_id: KNOWN_FAMILY, period: "2026-Q4" },
+      arguments: { token: await mintToken(ENTITLED_BUYER), family_id: KNOWN_FAMILY, period: "2026-Q4" },
     });
 
     expect(result.isError).toBeFalsy();
@@ -205,7 +214,7 @@ describe("D9 — complete buyer agent session (well_known → discover → forec
 
     const disc = await client.callTool({
       name: "discover_products",
-      arguments: { buyer_id: ENTITLED_BUYER },
+      arguments: { token: await mintToken(ENTITLED_BUYER) },
     });
     expect(disc.isError).toBeFalsy();
     const discBody = parseToolText(disc) as Record<string, unknown>;
@@ -214,7 +223,7 @@ describe("D9 — complete buyer agent session (well_known → discover → forec
     // Use the first discovered family to request a forecast — realistic agent behaviour
     const fc = await client.callTool({
       name: "get_forecast",
-      arguments: { buyer_id: ENTITLED_BUYER, family_id: firstFamily, period: "2026-Q4" },
+      arguments: { token: await mintToken(ENTITLED_BUYER), family_id: firstFamily, period: "2026-Q4" },
     });
     expect(fc.isError).toBeFalsy();
     const fcBody = parseToolText(fc) as Record<string, unknown>;
@@ -230,7 +239,7 @@ describe("D9 — complete buyer agent session (well_known → discover → forec
     const client = await connectClient();
     const result = await client.callTool({
       name: "discover_products",
-      arguments: { buyer_id: UNKNOWN_BUYER },
+      arguments: { token: await mintToken(UNKNOWN_BUYER) },
     });
 
     expect(result.isError).toBe(true);
@@ -244,7 +253,7 @@ describe("D9 — complete buyer agent session (well_known → discover → forec
     const client = await connectClient();
     const result = await client.callTool({
       name: "get_forecast",
-      arguments: { buyer_id: UNKNOWN_BUYER, family_id: KNOWN_FAMILY, period: "2026-Q4" },
+      arguments: { token: await mintToken(UNKNOWN_BUYER), family_id: KNOWN_FAMILY, period: "2026-Q4" },
     });
 
     expect(result.isError).toBe(true);

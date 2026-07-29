@@ -2,7 +2,10 @@ import { SignJWT, compactDecrypt, jwtVerify } from "jose";
 import { randomUUID } from "crypto";
 import type { DeploymentConfig } from "../config/deployment.js";
 
-const CONTRACT_VERSION = "0.1.0";
+// Buyer-facing contract version advertised in the capability document. Bumped 0.1.0 → 0.2.0
+// in v0.4 Bloque A: the buyer tool contract changed shape (no buyer_id argument; identity is
+// derived from the token's sub). Kept in sync with server.ts CONTRACT_VERSION.
+const CONTRACT_VERSION = "0.2.0";
 
 // Well-known capability document schema — e12-discovery-trust-anchor-signoff.md §7.
 // Content minimum: node_id, version, posture, capability_families, issued_at, signature.

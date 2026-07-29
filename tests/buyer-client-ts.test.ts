@@ -5,6 +5,7 @@ import { generateDevKeyPair } from "../src/identity/jwk.js";
 import { TokenIssuer } from "../src/identity/issuer.js";
 import { TokenValidator } from "../src/identity/validator.js";
 import { createMemoryDenylist } from "../src/identity/denylist.js";
+import { BUYER_ISS, BUYER_AUD } from "../src/identity/types.js";
 import { WellKnownService } from "../src/discovery/well-known.js";
 import { TEST_DEPLOYMENT_CONFIG } from "../src/config/deployment.js";
 import { CatalogStore, TEST_CATALOG_CONFIG } from "../src/catalog/store.js";
@@ -26,14 +27,20 @@ const UNKNOWN_BUYER = "intruder-999";
 describe("examples/buyer-client-ts — SellerMcpBuyerClient against a live node", () => {
   let httpServer: Server;
   let buyer: SellerMcpBuyerClient;
+  let issuer: TokenIssuer;
+  let entitledToken: string;
+  let unknownToken: string;
 
   beforeAll(async () => {
     const keyPair = await generateDevKeyPair();
     const wellKnown = new WellKnownService(keyPair.privateKey, keyPair.publicKey, TEST_DEPLOYMENT_CONFIG);
+    issuer = new TokenIssuer(keyPair.privateKey);
+    entitledToken = (await issuer.issue(ENTITLED_BUYER, BUYER_AUD)).token;
+    unknownToken = (await issuer.issue(UNKNOWN_BUYER, BUYER_AUD)).token;
     const deps = {
       store: new EntitlementStore(TEST_ENTITLEMENTS_DEMO_CONFIG),
-      issuer: new TokenIssuer(keyPair.privateKey),
-      validator: new TokenValidator(keyPair.publicKey, createMemoryDenylist()),
+      issuer,
+      validator: new TokenValidator(keyPair.publicKey, createMemoryDenylist(), BUYER_ISS, BUYER_AUD),
       wellKnown,
       catalog: new CatalogStore(TEST_CATALOG_CONFIG),
       pricingStore: new PricingStore(TEST_PRICING_CONFIG),
@@ -65,21 +72,21 @@ describe("examples/buyer-client-ts — SellerMcpBuyerClient against a live node"
   });
 
   it("discovers product families for an entitled buyer", async () => {
-    const families = await buyer.discoverProducts(ENTITLED_BUYER);
+    const families = await buyer.discoverProducts({ token: entitledToken });
     expect(families.length).toBeGreaterThan(0);
     expect(families[0]!.family_id).toBeTruthy();
   });
 
   it("throws a typed BuyerAccessError (AUTH_FAILED) for an unknown buyer (Default-Deny)", async () => {
-    await expect(buyer.discoverProducts(UNKNOWN_BUYER)).rejects.toMatchObject({
+    await expect(buyer.discoverProducts({ token: unknownToken })).rejects.toMatchObject({
       name: "BuyerAccessError",
       code: "AUTH_FAILED",
     });
   });
 
   it("returns a coarse, synthetic forecast bucket", async () => {
-    const [family] = await buyer.discoverProducts(ENTITLED_BUYER);
-    const forecast = await buyer.getForecast(ENTITLED_BUYER, family!.family_id, "Q4-2026");
+    const [family] = await buyer.discoverProducts({ token: entitledToken });
+    const forecast = await buyer.getForecast(family!.family_id, "Q4-2026", { token: entitledToken });
     expect(forecast.synthetic).toBe(true);
     expect(["low", "mid", "high"]).toContain(forecast.bucket);
   });

@@ -53,6 +53,23 @@ describe("DeploymentConfig — validation (fail-closed)", () => {
     expect(() => validateDeploymentConfig(null)).toThrow();
     expect(() => validateDeploymentConfig("config")).toThrow();
   });
+
+  // v0.4 Bloque A (A3) — require_auth enforcement.
+  it("defaults require_auth to true when absent (secure default)", () => {
+    expect(validateDeploymentConfig(VALID).require_auth).toBe(true);
+  });
+
+  it("accepts require_auth: true", () => {
+    expect(validateDeploymentConfig({ ...VALID, require_auth: true }).require_auth).toBe(true);
+  });
+
+  it("FAIL-CLOSED: rejects require_auth:false (no anonymous buyer path under token-only identity)", () => {
+    expect(() => validateDeploymentConfig({ ...VALID, require_auth: false })).toThrow(/require_auth/);
+  });
+
+  it("rejects a non-boolean require_auth", () => {
+    expect(() => validateDeploymentConfig({ ...VALID, require_auth: "yes" })).toThrow(/require_auth/);
+  });
 });
 
 describe("DeploymentConfig — shipped dev config matches signed acts", () => {
