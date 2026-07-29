@@ -13,6 +13,9 @@
 import { loadOrCreateKeyPair } from "../src/identity/keystore.js";
 import { TokenIssuer } from "../src/identity/issuer.js";
 import { BUYER_AUD } from "../src/identity/types.js";
+import { AuditLedger, DEV_LEDGER_PATH } from "../src/audit/ledger.js";
+import { PseudonymService, DEV_PSEUDONYM_KEYS_PATH } from "../src/audit/pseudonym.js";
+import { recordTokenIssuance } from "../src/identity/token-audit.js";
 
 const [, , buyerId] = process.argv;
 if (!buyerId) {
@@ -23,6 +26,11 @@ if (!buyerId) {
 const keyPair = await loadOrCreateKeyPair();
 const issuer = new TokenIssuer(keyPair.privateKey);
 const { token, claims } = await issuer.issue(buyerId, BUYER_AUD);
+
+// Audit the issuance (v0.6 hardening C) — same persistent ledger + pseudonym keys the server
+// uses, so the event is pseudonymized consistently and joins the shared hash chain.
+const ledger = new AuditLedger(DEV_LEDGER_PATH, new PseudonymService(DEV_PSEUDONYM_KEYS_PATH));
+recordTokenIssuance(ledger, { buyer_id: buyerId, jti: claims.jti, aud: claims.aud, exp: claims.exp });
 
 process.stdout.write(token + "\n");
 process.stderr.write(
