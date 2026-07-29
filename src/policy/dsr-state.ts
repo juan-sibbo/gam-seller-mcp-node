@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from "fs";
 import { dirname } from "path";
+import { dataPath } from "../config/paths.js";
 
 // Persistent DSR overlay — a durable record of the GDPR legal overrides applied on top of
 // the operator's entitlements config. Kept DELIBERATELY SEPARATE from config/entitlements.json
@@ -19,7 +20,7 @@ export interface DsrState {
   restricted: string[];
 }
 
-export const DEV_DSR_STATE_PATH = "./data/dsr-state.json";
+export const DEV_DSR_STATE_PATH = dataPath("dsr-state.json");
 
 export function emptyDsrState(): DsrState {
   return { suppressed: [], restricted: [] };

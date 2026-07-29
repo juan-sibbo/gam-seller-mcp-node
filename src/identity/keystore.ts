@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { dirname } from "path";
 import { exportJWK, importJWK, type JWK } from "jose";
 import { generateDevKeyPair, type KeyPairBundle } from "./jwk.js";
+import { keysPath } from "../config/paths.js";
 
 // Persistent RS256 keypair — Fase A (resolves auditoría I-9).
 // Ephemeral per-boot keys broke every outstanding token and well-known signature on
@@ -13,7 +14,7 @@ import { generateDevKeyPair, type KeyPairBundle } from "./jwk.js";
 // ponytail: no overlap-window machinery yet; add the two-key validator set when the
 // first external consumer exists (periodic cadence is [[por definir]] Fase 1 anyway).
 
-export const DEV_KEYSTORE_PATH = "./keys/node-rs256.private.jwk.json";
+export const DEV_KEYSTORE_PATH = keysPath("node-rs256.private.jwk.json");
 
 export async function loadOrCreateKeyPair(path = DEV_KEYSTORE_PATH): Promise<KeyPairBundle> {
   let raw: string | undefined;

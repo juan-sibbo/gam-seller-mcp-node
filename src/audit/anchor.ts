@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { dirname } from "path";
+import { dataPath } from "../config/paths.js";
 
 // External head-hash anchoring — decision-package Bloque 2 §2.1 + §2.2.
 // Ratified: cloud-immutable (Object Lock) destination; 60-min batch; head-hash-first verify.
@@ -123,7 +124,7 @@ export function createMemoryAnchor(): HeadHashAnchor {
   return new HeadHashAnchor(null);
 }
 
-export const DEV_ANCHOR_PATH = "./data/anchor-records.json";
+export const DEV_ANCHOR_PATH = dataPath("anchor-records.json");
 
 // Anchoring interval in milliseconds — ratified as 60 min (decision-package §2.2).
 export const ANCHOR_INTERVAL_MS = 60 * 60 * 1000;
