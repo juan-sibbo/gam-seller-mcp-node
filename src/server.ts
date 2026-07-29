@@ -15,6 +15,7 @@ import { BUYER_ISS, BUYER_AUD } from "./identity/types.js";
 import { WellKnownService } from "./discovery/well-known.js";
 import { CatalogStore, loadCatalogFromFile } from "./catalog/store.js";
 import { PricingStore, loadPricingFromFile } from "./pricing/store.js";
+import { projectFamily } from "./catalog/projection.js";
 import { IntentStore } from "./intent/store.js";
 import { RateLimiter } from "./rate-limiter/limiter.js";
 import { ForecastEngine } from "./forecast/engine.js";
@@ -225,18 +226,14 @@ function buildServer(deps: ServerDeps): McpServer {
       }
 
       // Synthetic catalog from config — zero GAM (S4).
-      // consent_context and legal_basis_provenance are Pilar 3 reserved fields (null in v1).
-      // SEC-GATE-13 bisturí: attach firm list price when available. Only the uniform list price
-      // is exposed — per-buyer pricing would collapse into commercial intelligence and must not
-      // land here without reopening SEC-GATE-13 (DP-AB-01 §3/§5.1, authorized 07/07/26).
-      const families = catalog.discover(buyer_id).map((f) => {
-        const price = pricingStore.priceFor(f.family_id);
-        if (!price) return f;
-        return {
-          ...f,
-          pricing_options: { list_price: price.list_price, currency: price.currency, valid_until: price.valid_until },
-        };
-      });
+      // Egress no-leak guard (C4): projectFamily copies ONLY the buyer-facing fields by name,
+      // never spreads the raw config object — so a sensitive key added to catalog.json can
+      // never reach a buyer. consent_context/legal_basis_provenance are forced to the Pilar 3
+      // reserved null. SEC-GATE-13 bisturí: attach the UNIFORM list price when available; only
+      // the list price is exposed (per-buyer/exact pricing stays denied — DP-AB-01 §3/§5.1).
+      const families = catalog.discover(buyer_id).map((f) =>
+        projectFamily(f, pricingStore.priceFor(f.family_id))
+      );
       recordOutcome(MetricTool.DISCOVER_PRODUCTS, ToolOutcome.SUCCESS);
       return { content: [{ type: "text", text: JSON.stringify({ families, request_id }) }] };
     }
