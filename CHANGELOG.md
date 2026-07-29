@@ -193,6 +193,46 @@ seller-agent loop — authenticate → discover with price → commit — no lon
 - **Governance.** The new `INTENT` surface was added to the adapter-boundary allowlist by a
   ratified amendment (owner+security, 2026-07-29); the denylist is unchanged and still prevails.
 
+## [0.6.0] — 2026-07-30
+
+Sixth release. The theme is **enforcement hardening**: with both Tier-0 engine blockers closed
+(v0.4 identity, v0.5 commitment), this pass tightens the guarantees around the loop — closing an
+anti-abuse gap, making no-leak structural, giving security acts an audit trail, and removing two
+ways persistence could fail silently or fail open. No new buyer-facing tools; the contract stays
+`0.2.0`.
+
+### Anti-abuse
+
+- **`create_intent` is now rate-limited per buyer (N=1/T=30s)**, like `discover_products` and
+  `get_forecast`. It is the only write surface and previously had no throttle, so a buyer could
+  flood the commitment store with distinct requests. Checked after policy, before any write.
+
+### No-leak (structural)
+
+- **Discovery output guard.** `discover_products` no longer spreads the raw catalog object; a
+  projection copies only the buyer-facing whitelist by name and forces the reserved Pilar 3
+  fields to null. A sensitive key mis-added to `catalog.json` (an internal floor, a GAM
+  line-item id, a deal ref) can no longer reach a buyer — the no-leak guarantee is now
+  structural rather than dependent on config-editing discipline.
+
+### Auditability
+
+- **Token issuance and revocation are audited.** The issue/revoke CLIs previously populated the
+  keystore/denylist with no ledger event, leaving revocation — a security-critical act —
+  untraceable. Both now emit the ratified `TOKEN_ISSUANCE`/`TOKEN_REVOCATION` events (token never
+  logged; buyer pseudonymized; correlatable by `jti`).
+
+### Persistence integrity
+
+- **Store paths are CWD-independent.** The `data/` and `keys/` locations resolve relative to the
+  module (via `import.meta.url`), not the launch directory, so starting the server from another
+  directory can no longer fail open to a fresh empty state. Optional `MCP_DATA_DIR`/`MCP_KEYS_DIR`
+  overrides for deployment.
+- **Ledger write failures are surfaced, not swallowed.** A failed disk write used to be a benign
+  `WARNING`; it now flips a persistence-health flag (`isPersistenceHealthy()`) and logs at `ERROR`
+  with the cause — a lost audit entry on a tamper-evident ledger is no longer invisible.
+
+[0.6.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.6.0
 [0.5.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.5.0
 [0.4.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.4.0
 [0.3.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.3.0
