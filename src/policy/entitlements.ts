@@ -199,6 +199,23 @@ export const TEST_ENTITLEMENTS_WITH_PRODUCTS_CONFIG: EntitlementsConfig = {
   ],
 };
 
+// Test fixture: v0.5 Bloque B — a buyer entitled to the INTENT commitment surface.
+export const TEST_ENTITLEMENTS_INTENT_CONFIG: EntitlementsConfig = {
+  entitlements: [
+    {
+      buyer_id: "test-buyer-001",
+      surfaces: [
+        AllowedSurface.DISCOVERY,
+        AllowedSurface.WELL_KNOWN,
+        AllowedSurface.PRODUCT_DISCOVERY,
+        AllowedSurface.INTENT,
+      ],
+      scopes: ["gam.readonly"],
+      phase: "phase-1-readonly",
+    },
+  ],
+};
+
 // Test fixture: full S5 demo entitlements including FORECAST surface.
 export const TEST_ENTITLEMENTS_DEMO_CONFIG: EntitlementsConfig = {
   entitlements: [

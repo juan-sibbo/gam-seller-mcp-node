@@ -7,6 +7,13 @@ export const AllowedSurface = {
   WELL_KNOWN: "well_known",
   AUTH_CONTEXT: "auth_context",
   ERROR_ENVELOPE: "error_envelope",
+  // INTENT — v0.5 Bloque B commitment primitive (plan-core-v04 §3). A buyer writes a
+  // soft, per-buyer commitment over a product at its current firm price; it is NEVER a
+  // legible surface over another buyer's state (cross_buyer_state stays denied below).
+  // GOVERNANCE: this surface was added to the allowlist by amendment to
+  // adapter-boundary-allowed-surfaces-signoff.md §3 — RATIFIED 2026-07-29 (owner+security JJ).
+  // The denylist below (cross_buyer_state, soft_lock_state, …) is unchanged and prevails.
+  INTENT: "intent",
 } as const;
 
 export type AllowedSurface = (typeof AllowedSurface)[keyof typeof AllowedSurface];
