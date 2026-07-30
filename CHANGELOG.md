@@ -249,6 +249,25 @@ last two ratified `INTENT_*` audit classes. Additive; the buyer contract stays `
   background sweep ages out intents past their TTL, emitting `INTENT_EXPIRED` for each. An expired
   or revoked intent is evicted — the ledger event is the durable record.
 
+## [0.8.0] — 2026-07-30
+
+Eighth release. The theme is **operability** — the first slice of getting the node into a real
+pilot. It adds a health endpoint and firms up the deployment profile; no buyer-facing surface
+changes, contract stays `0.2.0`.
+
+### Health & operability
+
+- **`GET /health`.** A non-sensitive readiness snapshot — `{ status, version, persistence_healthy }`
+  — for load balancers, orchestrators, and uptime checks. Public by design (an off-host probe must
+  reach it), carrying only the node version and an aggregate durability signal; never buyer data or
+  counts (so, unlike `/metrics`, it is safe off-loopback). It always returns `200` while the process
+  can answer; `status:"degraded"` surfaces the ledger durability flag (v0.6) — a failed audit write
+  while the node keeps serving, something to alert on rather than a reason to drop traffic.
+- **Deployment profile.** The guide documents `/health` and the loopback-only `/metrics`, the
+  `MCP_DATA_DIR` / `MCP_KEYS_DIR` overrides for persistent volumes, and makes the single-instance
+  constraint explicit (the rate limiter, replay guard, and intent store are in-memory per process).
+
+[0.8.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.0
 [0.7.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.7.0
 [0.6.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.6.0
 [0.5.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.5.0
