@@ -199,11 +199,23 @@ export const TEST_ENTITLEMENTS_WITH_PRODUCTS_CONFIG: EntitlementsConfig = {
   ],
 };
 
-// Test fixture: v0.5 Bloque B — a buyer entitled to the INTENT commitment surface.
+// Test fixture: v0.5 Bloque B — buyers entitled to the INTENT commitment surface.
+// Two buyers so cross-buyer isolation (a buyer can't revoke another's intent) is testable.
 export const TEST_ENTITLEMENTS_INTENT_CONFIG: EntitlementsConfig = {
   entitlements: [
     {
       buyer_id: "test-buyer-001",
+      surfaces: [
+        AllowedSurface.DISCOVERY,
+        AllowedSurface.WELL_KNOWN,
+        AllowedSurface.PRODUCT_DISCOVERY,
+        AllowedSurface.INTENT,
+      ],
+      scopes: ["gam.readonly"],
+      phase: "phase-1-readonly",
+    },
+    {
+      buyer_id: "pilot-buyer-001",
       surfaces: [
         AllowedSurface.DISCOVERY,
         AllowedSurface.WELL_KNOWN,

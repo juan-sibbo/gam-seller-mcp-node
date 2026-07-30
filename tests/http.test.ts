@@ -151,7 +151,7 @@ describe("HTTP transport — E-12 canonical route + MCP endpoint", () => {
     await client.connect(transport);
 
     const tools = await client.listTools();
-    expect(tools.tools.map((t) => t.name).sort()).toEqual(["create_intent", "discover_products", "get_forecast", "well_known_capabilities"]);
+    expect(tools.tools.map((t) => t.name).sort()).toEqual(["create_intent", "discover_products", "get_forecast", "revoke_intent", "well_known_capabilities"]);
 
     const ok = await client.callTool({ name: "discover_products", arguments: { token: (await issuer.issue(ENTITLED_BUYER, BUYER_AUD)).token } });
     expect(ok.isError).toBeFalsy();
