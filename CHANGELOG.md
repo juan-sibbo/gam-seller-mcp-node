@@ -232,6 +232,24 @@ ways persistence could fail silently or fail open. No new buyer-facing tools; th
   `WARNING`; it now flips a persistence-health flag (`isPersistenceHealthy()`) and logs at `ERROR`
   with the cause — a lost audit entry on a tamper-evident ledger is no longer invisible.
 
+## [0.7.0] — 2026-07-30
+
+Seventh release. The theme is **the intent lifecycle**: a commitment can now end — it expires
+when its TTL lapses, or the buyer revokes it. This closes the loop opened in v0.5 and wires the
+last two ratified `INTENT_*` audit classes. Additive; the buyer contract stays `0.2.0`.
+
+### Commitment lifecycle
+
+- **`revoke_intent` tool.** A buyer revokes one of its own active intents by id. It lives inside
+  the already-ratified `INTENT` surface (affecting your own state), so no new governance act is
+  needed. Revoking an intent that is unknown, another buyer's, already terminal, or lapsed returns
+  the same generic `INVALID_REQUEST` — a buyer can never probe or affect another buyer's intent.
+  A valid revoke emits the ratified `INTENT_REVOKED` (buyer pseudonymized, payload minimized).
+- **TTL is now enforced.** `create_intent` recorded an `expires_at` but nothing acted on it. A
+  background sweep ages out intents past their TTL, emitting `INTENT_EXPIRED` for each. An expired
+  or revoked intent is evicted — the ledger event is the durable record.
+
+[0.7.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.7.0
 [0.6.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.6.0
 [0.5.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.5.0
 [0.4.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.4.0
