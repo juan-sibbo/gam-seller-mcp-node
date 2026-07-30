@@ -200,7 +200,7 @@ def run_probe(base_url: str) -> None:
     )
     if tools_parsed:
         tool_names = sorted(t["name"] for t in (tools_parsed.get("result") or {}).get("tools", []))
-        expected = ["create_intent", "discover_products", "get_forecast", "well_known_capabilities"]
+        expected = ["create_intent", "discover_products", "get_forecast", "revoke_intent", "well_known_capabilities"]
         if tool_names == expected:
             ok(f"tools = {tool_names}")
         else:

@@ -35,6 +35,10 @@ import { randomUUID } from "crypto";
 // change to the tool input shape, so the contract version moves.
 const CONTRACT_VERSION = "0.2.0";
 
+// How often the background sweep ages out expired intents (v0.6+ intent lifecycle).
+// A minute is fine: the intent TTL is minutes-to-hours and expiry is not latency-sensitive.
+const INTENT_SWEEP_INTERVAL_MS = 60_000;
+
 interface ServerDeps {
   store: EntitlementStore;
   issuer: TokenIssuer;
@@ -393,7 +397,79 @@ function buildServer(deps: ServerDeps): McpServer {
     }
   );
 
+  // Revoke one of your OWN active intents (v0.6+ intent lifecycle). Within the already-ratified
+  // INTENT surface (write/read-your-own) — revoking is affecting your own state, never another
+  // buyer's. Order: replay → token auth → policy → buyer-scoped revoke → emit INTENT_REVOKED.
+  // A revoke that matches nothing (unknown id, another buyer's intent, already terminal, or
+  // lapsed) returns the same generic INVALID_REQUEST — the buyer cannot probe others' intents.
+  server.tool(
+    "revoke_intent",
+    "Revoke one of your own active intents by id. Idempotent per client_request_id.",
+    {
+      intent_id: z.string().describe("The intent_id returned by create_intent"),
+      token: z.string().optional().describe("Buyer bearer JWT (RS256, aud=seller-mcp-node). Identity is derived from token.sub."),
+      client_request_id: z.string().optional().describe("Client-supplied idempotency key for replay detection"),
+    },
+    async ({ intent_id, token, client_request_id }) => {
+      const request_id = randomUUID();
+
+      if (client_request_id !== undefined) {
+        if (replayGuard.isReplay(client_request_id)) {
+          metricsRegistry?.increment("mcp_replay_rejected_total", { tool: MetricTool.REVOKE_INTENT });
+          recordOutcome(MetricTool.REVOKE_INTENT, ToolOutcome.REPLAY_REJECTED);
+          return replayResult(request_id);
+        }
+        replayGuard.record(client_request_id);
+      }
+
+      const auth = await authenticate(token, AllowedSurface.INTENT, request_id);
+      if (!auth) {
+        metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.REVOKE_INTENT, reason: AuthFailReason.TOKEN_INVALID });
+        recordOutcome(MetricTool.REVOKE_INTENT, ToolOutcome.AUTH_FAILED);
+        return authFailedResult(request_id);
+      }
+      const buyer_id = auth.buyer_id;
+
+      if (!resolveScope(buyer_id, AllowedSurface.INTENT, request_id)) {
+        metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.REVOKE_INTENT, reason: AuthFailReason.SCOPE_DENIED });
+        recordOutcome(MetricTool.REVOKE_INTENT, ToolOutcome.AUTH_FAILED);
+        return authFailedResult(request_id);
+      }
+
+      // Buyer-scoped: undefined when the intent is absent, another buyer's, terminal, or lapsed.
+      const revoked = intentStore.revoke(intent_id, buyer_id);
+      if (!revoked) {
+        recordOutcome(MetricTool.REVOKE_INTENT, ToolOutcome.INVALID_REQUEST);
+        return invalidRequestResult(request_id);
+      }
+
+      // INTENT_REVOKED — ratified class (event.ts:13). Payload minimized; buyer pseudonymized.
+      ledger.append(
+        EventClass.INTENT_REVOKED,
+        { intent_id: revoked.intent_id },
+        { buyer_id, request_id }
+      );
+      recordOutcome(MetricTool.REVOKE_INTENT, ToolOutcome.SUCCESS);
+      return {
+        content: [{ type: "text", text: JSON.stringify({ intent_id: revoked.intent_id, status: revoked.status, request_id }) }],
+      };
+    }
+  );
+
   return server;
+}
+
+// Age out expired intents and emit INTENT_EXPIRED for each (v0.6+ intent lifecycle). Wired on
+// a timer in main(); exported so the emission logic is unit-testable without a live server.
+// The store evicts each lapsed intent, so re-running is a no-op once everything has expired.
+function sweepExpiredIntents(intentStore: IntentStore, ledger: AuditLedger, now: Date = new Date()): void {
+  for (const intent of intentStore.sweepExpired(now)) {
+    ledger.append(
+      EventClass.INTENT_EXPIRED,
+      { intent_id: intent.intent_id, expires_at: intent.expires_at },
+      { buyer_id: intent.buyer_id }
+    );
+  }
 }
 
 // Anchor the ledger head externally — decision-package Bloque 2 §2.2 (60-min batch, RATIFIED).
@@ -463,6 +539,11 @@ async function main() {
   runRetentionCycle(retention, ledger, Date.now(), pseudonyms);
   setInterval(() => runRetentionCycle(retention, ledger, Date.now(), pseudonyms), RETENTION_INTERVAL_MS).unref();
 
+  // Age out expired intents on a timer, emitting INTENT_EXPIRED (v0.6+ intent lifecycle).
+  // Without this the TTL would be advisory: a lapsed commitment would linger as "active" and
+  // its expiry would never be audited.
+  setInterval(() => sweepExpiredIntents(intentStore, ledger), INTENT_SWEEP_INTERVAL_MS).unref();
+
   const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, intentStore, intentRateLimiter, metricsRegistry };
 
   // Fase A: --http serves StreamableHTTP on 127.0.0.1 (external bind = infra act, #8/#10).
@@ -483,7 +564,7 @@ async function main() {
   process.stderr.write("GAM Seller MCP Node started (stdio; dev context, read-only MVP, G5 signed 04/07/26)\n");
 }
 
-export { buildServer, anchorHead };
+export { buildServer, anchorHead, sweepExpiredIntents };
 export type { ServerDeps };
 
 // Only boot when executed directly — importing buildServer (tests, tooling) must not

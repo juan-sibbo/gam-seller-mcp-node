@@ -79,6 +79,35 @@ export class IntentStore {
     return intent;
   }
 
+  // Revoke a buyer's own active, non-expired intent (v0.6+ lifecycle). Returns the revoked
+  // intent (status "revoked") so the caller can emit INTENT_REVOKED, or undefined if it is
+  // absent, owned by another buyer (cross-buyer denied), already terminal, or past its TTL.
+  // The intent is evicted — the ledger event is the record of record (no read surface yet).
+  revoke(intent_id: string, buyer_id: string, now: Date = new Date()): Intent | undefined {
+    const intent = this.byId.get(intent_id);
+    if (!intent || intent.buyer_id !== buyer_id) return undefined; // absent or cross-buyer
+    if (intent.status !== "active" || Date.parse(intent.expires_at) <= now.getTime()) {
+      return undefined; // already terminal, or lapsed (a sweep will emit its expiry)
+    }
+    this.byId.delete(intent_id);
+    return { ...intent, status: "revoked" };
+  }
+
+  // Age out intents whose TTL has passed: evict each active intent past its expiry and return
+  // it with status "expired" so the caller can emit INTENT_EXPIRED. Idempotent — an intent is
+  // only returned the first time it lapses (it is removed), so the event fires exactly once.
+  sweepExpired(now: Date = new Date()): Intent[] {
+    const expired: Intent[] = [];
+    for (const [id, intent] of this.byId) {
+      if (intent.status === "active" && Date.parse(intent.expires_at) <= now.getTime()) {
+        expired.push({ ...intent, status: "expired" });
+        this.byId.delete(id);
+      }
+    }
+    return expired;
+  }
+
+  // Count of live (non-terminal) intents held. Terminal ones are evicted on revoke/expiry.
   size(): number {
     return this.byId.size;
   }

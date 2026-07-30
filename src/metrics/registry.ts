@@ -17,6 +17,7 @@ export const MetricTool = {
   DISCOVER_PRODUCTS: "discover_products",
   GET_FORECAST: "get_forecast",
   CREATE_INTENT: "create_intent",
+  REVOKE_INTENT: "revoke_intent",
 } as const;
 export type MetricTool = (typeof MetricTool)[keyof typeof MetricTool];
 
