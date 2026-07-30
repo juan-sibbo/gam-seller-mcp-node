@@ -1,3 +1,4 @@
+import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { join, dirname } from "path";
 
@@ -23,3 +24,19 @@ export const KEYS_DIR = process.env.MCP_KEYS_DIR ?? join(repoRoot, "keys");
 
 export const dataPath = (name: string): string => join(DATA_DIR, name);
 export const keysPath = (name: string): string => join(KEYS_DIR, name);
+
+// The node's package version, resolved from package.json at the repo root and memoized.
+// Used by the /health snapshot so operators can see which release is running. Fails soft to
+// "unknown" — a health endpoint must never crash on a missing/unreadable manifest.
+let cachedVersion: string | undefined;
+export function packageVersion(): string {
+  if (cachedVersion === undefined) {
+    try {
+      const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf-8")) as { version?: string };
+      cachedVersion = typeof pkg.version === "string" ? pkg.version : "unknown";
+    } catch {
+      cachedVersion = "unknown";
+    }
+  }
+  return cachedVersion;
+}
