@@ -6,6 +6,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { WellKnownService } from "./discovery/well-known.js";
 import { WELL_KNOWN_PATH, WELL_KNOWN_CACHE_TTL_SECONDS } from "./discovery/well-known.js";
 import type { MetricsRegistry } from "./metrics/registry.js";
+import type { HealthReport } from "./health.js";
 
 // HTTP transport — Fase A (stdio → StreamableHTTP).
 // Two surfaces only:
@@ -20,6 +21,7 @@ import type { MetricsRegistry } from "./metrics/registry.js";
 
 export const MCP_PATH = "/mcp";
 export const METRICS_PATH = "/metrics";
+export const HEALTH_PATH = "/health";
 
 // Loopback-only exposure for /metrics. The default bind is 127.0.0.1, but a request
 // can still arrive from elsewhere if the operator binds externally (infra act #8/#10);
@@ -54,6 +56,9 @@ interface HttpDeps {
   // Optional operator-facing metrics. When absent, /metrics does not exist (404) —
   // a deployment opts in by injecting the shared registry (same instance buildServer holds).
   metricsRegistry?: MetricsRegistry;
+  // Optional health snapshot provider for GET /health. When absent, /health still answers
+  // with a basic liveness ("ok" + version unknown) — the process is up if it can reply.
+  getHealth?: () => HealthReport;
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
@@ -106,6 +111,20 @@ export async function startHttpServer(deps: HttpDeps, opts: HttpOptions): Promis
         deps.metricsRegistry.set("mcp_active_sessions", sessions.size);
         res.writeHead(200, { "Content-Type": "text/plain; version=0.0.4; charset=utf-8" });
         res.end(deps.metricsRegistry.render());
+        return;
+      }
+
+      // Health snapshot — for orchestrators, load balancers, uptime checks. Public by
+      // design (an off-host probe must reach it), but the payload is deliberately
+      // non-sensitive: node version + aggregate durability signal only, never buyer data
+      // or counts. Always 200 when the process can answer (liveness); a degraded audit
+      // durability shows in the body (status:"degraded"), not as a dropped connection.
+      if (url.pathname === HEALTH_PATH && req.method === "GET") {
+        const report = deps.getHealth
+          ? deps.getHealth()
+          : { status: "ok" as const, version: "unknown", persistence_healthy: true };
+        res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify(report));
         return;
       }
 

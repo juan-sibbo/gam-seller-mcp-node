@@ -117,10 +117,18 @@ Environment variables:
 ```
 MCP_HTTP_HOST=0.0.0.0    # change only if you're behind a reverse proxy
 MCP_HTTP_PORT=3900
+MCP_DATA_DIR=/var/lib/gam-seller/data   # optional: audit ledger, denylist, anchors, pseudonym keys
+MCP_KEYS_DIR=/var/lib/gam-seller/keys   # optional: persistent RS256 keypair
 ```
 
+Persistence paths resolve relative to the installed module by default (not the launch
+directory), so the node cannot fail open to a fresh empty state if started from elsewhere.
+Point `MCP_DATA_DIR` / `MCP_KEYS_DIR` at a durable, backed-up volume in production.
+
 **Important:** do not expose port 3900 directly to the internet. Put it behind a reverse proxy
-(nginx, Caddy) that handles TLS termination.
+(nginx, Caddy) that handles TLS termination. This is a single-instance profile: the rate
+limiter, replay guard, and intent store are in-memory per process, so run exactly one instance
+(scaling out needs shared state — not yet supported).
 
 ### Docker
 
@@ -159,6 +167,25 @@ Expected probe output:
 ...
 === PROBE PASSED: all assertions green ===
 ```
+
+## Health & monitoring
+
+**`GET /health`** — a non-sensitive readiness snapshot for load balancers, orchestrators, and
+uptime checks. Public by design (an off-host probe must reach it); it carries only the node
+version and an aggregate durability signal — never buyer data or counts.
+
+```bash
+curl http://127.0.0.1:3900/health
+# {"status":"ok","version":"0.8.0","persistence_healthy":true}
+```
+
+It always returns `200` while the process can answer (liveness). Watch the body:
+`status:"degraded"` / `persistence_healthy:false` means a disk write to the audit ledger has
+failed — the node is still serving, but audit durability is at risk. **Alert on it** (and check
+disk / the `MCP_DATA_DIR` volume); it is not a reason to drop traffic.
+
+**`GET /metrics`** — Prometheus exposition, **loopback-only** (403 off-host) and only present
+when metrics are enabled. Scrape it from a local agent; never expose it off-host.
 
 ## Rotating keys
 

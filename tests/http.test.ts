@@ -7,7 +7,8 @@ import { join } from "path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { buildServer } from "../src/server.js";
-import { startHttpServer, httpOptionsFromEnv, MCP_PATH } from "../src/http.js";
+import { startHttpServer, httpOptionsFromEnv, MCP_PATH, HEALTH_PATH } from "../src/http.js";
+import { buildHealthReport } from "../src/health.js";
 import { loadOrCreateKeyPair } from "../src/identity/keystore.js";
 import { generateDevKeyPair, type KeyPairBundle } from "../src/identity/jwk.js";
 import { TokenIssuer } from "../src/identity/issuer.js";
@@ -102,7 +103,11 @@ describe("HTTP transport — E-12 canonical route + MCP endpoint", () => {
       ledger: createMemoryLedger(),
     };
     httpServer = await startHttpServer(
-      { makeServer: () => buildServer(deps), wellKnown },
+      {
+        makeServer: () => buildServer(deps),
+        wellKnown,
+        getHealth: () => buildHealthReport(true, "test-node"),
+      },
       { host: "127.0.0.1", port: 0 } // ephemeral port
     );
     const { port } = httpServer.address() as AddressInfo;
@@ -120,6 +125,14 @@ describe("HTTP transport — E-12 canonical route + MCP endpoint", () => {
     const doc = await wellKnown.verify(signedDoc);
     expect(doc.node_id).toBeTruthy();
     expect(doc.privacy_posture.end_user_personal_data).toBe("none");
+  });
+
+  it("GET /health returns a 200 non-sensitive readiness snapshot", async () => {
+    const res = await fetch(baseUrl + HEALTH_PATH);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    const body = await res.json();
+    expect(body).toEqual({ status: "ok", version: "test-node", persistence_healthy: true });
   });
 
   it("well-known Cache-Control honors the ratified ≤15 min buyer-side TTL (e12 §6)", async () => {

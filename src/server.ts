@@ -27,6 +27,8 @@ import { HeadHashAnchor, DEV_ANCHOR_PATH, ANCHOR_INTERVAL_MS } from "./audit/anc
 import { RetentionService, DEV_ARCHIVE_PATH, runRetentionCycle, RETENTION_INTERVAL_MS } from "./audit/retention.js";
 import { EventClass } from "./audit/event.js";
 import { startHttpServer, httpOptionsFromEnv } from "./http.js";
+import { buildHealthReport } from "./health.js";
+import { packageVersion } from "./config/paths.js";
 import { MetricsRegistry, MetricTool, ToolOutcome, AuthFailReason } from "./metrics/registry.js";
 import { randomUUID } from "crypto";
 
@@ -550,7 +552,16 @@ async function main() {
   // Default remains stdio for MCP-host usage.
   if (process.argv.includes("--http")) {
     const opts = httpOptionsFromEnv();
-    await startHttpServer({ makeServer: () => buildServer(deps), wellKnown, metricsRegistry }, opts);
+    await startHttpServer(
+      {
+        makeServer: () => buildServer(deps),
+        wellKnown,
+        metricsRegistry,
+        // Health reflects the shared ledger's live durability flag (v0.6 E1) + node version.
+        getHealth: () => buildHealthReport(ledger.isPersistenceHealthy(), packageVersion()),
+      },
+      opts
+    );
     process.stderr.write(
       `GAM Seller MCP Node started on http://${opts.host}:${opts.port} (MCP at /mcp, well-known at canonical route; dev context, read-only MVP)\n`
     );
