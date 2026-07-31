@@ -1,9 +1,9 @@
 # Buyer Agent Integration Guide
 
 This guide explains how to write a buyer agent that uses a GAM Seller MCP Node to discover
-sell-side ad inventory.
+sell-side ad inventory and commit to it.
 
-## The three-step session
+## The buyer session
 
 A well-behaved buyer agent follows this sequence:
 
@@ -11,12 +11,16 @@ A well-behaved buyer agent follows this sequence:
 1. GET /.well-known/seller-mcp-capabilities   ← verify trust anchor before connecting
 2. MCP initialize + notifications/initialized ← establish session
 3. tools/call well_known_capabilities         ← confirm node identity and privacy posture
-4. tools/call discover_products               ← list available product families
+4. tools/call discover_products               ← list product families + firm prices
 5. tools/call get_forecast (per family)       ← get coarse availability for planning
+6. tools/call create_intent                   ← commit to a family at its firm price (optional)
+7. tools/call revoke_intent                   ← withdraw a commitment you made (optional)
 ```
 
-Steps 1 and 3 are both trust checks — step 1 uses HTTP before the MCP session exists,
-step 3 uses the MCP tool within the session. A cautious agent does both.
+Steps 1–5 are read-only. Steps 6–7 are the only writes a buyer can make, and they only ever
+affect that buyer's own commitments — never the ad server, never another buyer. Steps 1 and 3 are
+both trust checks — step 1 uses HTTP before the MCP session exists, step 3 uses the MCP tool within
+the session. A cautious agent does both.
 
 ## TypeScript example (MCP SDK)
 
@@ -64,6 +68,30 @@ for (const family of families) {
   });
   const { bucket } = JSON.parse(fc.content[0].text);
   console.log(`${family.label}: ${bucket}`);  // "low" | "mid" | "high"
+}
+
+// 4. Commit to a family at its firm price (optional — this is the only write you can make).
+//    price_ref MUST equal the family's current list_price, or the node rejects it (fail-closed).
+const chosen = families.find((f) => f.pricing_options);
+if (chosen) {
+  const created = await client.callTool({
+    name: "create_intent",
+    arguments: {
+      token,
+      family_id: chosen.family_id,
+      period: "2026-Q4",
+      price_ref: chosen.pricing_options.list_price,
+      client_request_id: crypto.randomUUID(),  // idempotency
+    },
+  });
+  const { intent_id, expires_at } = JSON.parse(created.content[0].text);
+  console.log(`intent ${intent_id} valid until ${expires_at}`);
+
+  // 5. Change your mind? Withdraw your own intent (optional).
+  await client.callTool({
+    name: "revoke_intent",
+    arguments: { token, intent_id, client_request_id: crypto.randomUUID() },
+  });
 }
 
 await client.close();
@@ -136,6 +164,38 @@ and the price has not expired. Absent `pricing_options` means "no published pric
 `bucket` is one of `"low"`, `"mid"`, or `"high"`. `synthetic: true` means the data is not from
 a live GAM connection — the real adapter is in progress.
 
+### `create_intent`
+
+```json
+{
+  "intent_id": "int_...",
+  "status": "active",
+  "firm_price": 4.5,
+  "expires_at": "2026-07-31T12:15:00Z",
+  "request_id": "..."
+}
+```
+
+Records a firm, time-boxed buying intent over a family at its current firm price. `expires_at` is
+capped at the price's own `valid_until` — an intent never outlives the offer it pins. This is **not**
+a GAM order or an inventory hold; it is the handoff artifact the classic sales rails pick up.
+Fail-closed: if `price_ref` does not match the family's current firm price (or the price has expired),
+the call returns `INVALID_REQUEST` — with the same generic envelope, so neither the real price nor the
+family's existence leaks.
+
+### `revoke_intent`
+
+```json
+{
+  "intent_id": "int_...",
+  "status": "revoked",
+  "request_id": "..."
+}
+```
+
+Withdraws one of **your own** active intents. Revoking an unknown id, another buyer's intent, or an
+already-terminal one returns the same generic `INVALID_REQUEST` — you cannot probe others' intents.
+
 ## Error responses
 
 All errors return `isError: true` and a JSON body:
@@ -150,7 +210,7 @@ Possible codes:
 |------|---------|
 | `AUTH_FAILED` | Missing/invalid/revoked token, or the token's buyer is not entitled |
 | `RATE_LIMITED` | Exceeded N=1/T=30s per buyer (identity from token.sub) |
-| `INVALID_REQUEST` | Replay detected (duplicate client_request_id) |
+| `INVALID_REQUEST` | Replay detected (duplicate client_request_id); or a stale/mismatched `price_ref` on `create_intent`; or a `revoke_intent` that matches none of your own active intents |
 
 Error responses are deliberately opaque: `AUTH_FAILED` covers all denial reasons to prevent
 probing for entitlement structure.

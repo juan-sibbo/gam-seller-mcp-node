@@ -9,7 +9,7 @@
 
 This is that interface.
 
-A governed, **read-only** [Model Context Protocol](https://modelcontextprotocol.io) server that exposes ad-inventory discovery from the sell side (Google Ad Manager and compatible systems) to buyer-side AI agents. No raw ad-server access. No writable surface. No sensitive data in responses. Every decision audited.
+A governed [Model Context Protocol](https://modelcontextprotocol.io) server that exposes sell-side ad inventory (Google Ad Manager and compatible systems) to buyer-side AI agents: discovery, firm pricing, and a soft **commitment** primitive. It performs **no writes to the ad server** — the only mutation it allows is a buyer's own soft commitment (a revocable, TTL-bound intent), never a GAM order or an inventory hold. No raw ad-server access. No sensitive data in responses. Every decision audited.
 
 ---
 
@@ -20,12 +20,13 @@ Sell-side ad inventory (availability, pricing, product structure) lives inside a
 | Risk | Without this project | With this project |
 |------|---------------------|-------------------|
 | Data over-exposure | Agent can read raw avails, deal IDs, exact floor prices | Only coarse buckets and pre-declared families |
-| Accidental writes | Agent SDK can create orders, modify line items | Server is structurally read-only — no write tool exists |
+| Accidental writes | Agent SDK can create orders, modify line items | No ad-server writes exist; the only write is a buyer's own soft commitment, which can never become a GAM order or an inventory hold |
 | No accountability | API calls are logged but not auditable | Hash-chained audit ledger; every allow/deny recorded |
 
 ## How it works
 
-A buyer agent connects via MCP and gets exactly three tools:
+A buyer agent connects via MCP and gets five tools — three read-only, plus a buyer-scoped
+commitment primitive (create/revoke) that is the sole write surface:
 
 ```
 Buyer agent
@@ -33,13 +34,21 @@ Buyer agent
     ├── well_known_capabilities   ← Signed trust anchor. Check this first.
     │       Returns: RS256-signed capability document, node identity, privacy posture.
     │
-    ├── discover_products         ← What can I buy here?
-    │       Returns: product families the buyer is entitled to see (e.g. "Pre-Roll Video").
-    │       Never returns: deal IDs, internal IDs, raw inventory, exact pricing.
+    ├── discover_products         ← What can I buy here, and at what firm price?
+    │       Returns: product families the buyer is entitled to see (e.g. "Pre-Roll Video"),
+    │               each with its firm list price when the publisher has configured one.
+    │       Never returns: deal IDs, internal IDs, raw inventory, exact per-impression pricing.
     │
-    └── get_forecast              ← How available is this family next quarter?
-            Returns: Low / Mid / High availability bucket + firm list price (if configured).
-            Never returns: exact impression counts, CPM curves, floor prices.
+    ├── get_forecast              ← How available is this family next quarter?
+    │       Returns: Low / Mid / High availability bucket.
+    │       Never returns: exact impression counts, CPM curves, floor prices.
+    │
+    ├── create_intent             ← Commit to a product at its current firm price (with TTL).
+    │       Records a firm, time-boxed buying intent — fail-closed if the price is stale or
+    │       mismatched. NOT a GAM order and NOT an inventory hold; it is the handoff artifact
+    │       the classic sales rails pick up. Buyer-scoped: you can only ever commit as yourself.
+    │
+    └── revoke_intent             ← Withdraw one of your own active intents by id.
 ```
 
 Every call flows through the same pipeline before any domain logic runs:
@@ -70,6 +79,10 @@ Every call flows through the same pipeline before any domain logic runs:
 ```
 
 A bug in any gate fails **closed**, not open.
+
+`create_intent` runs the same gates and adds one more before it records anything: the buyer's
+`price_ref` must match the family's current firm price, or the request is rejected — fail-closed on
+a stale or mismatched offer, so an intent can never pin a price the publisher is no longer offering.
 
 ## Quick start
 
@@ -118,11 +131,12 @@ with a silently different access policy. See
 |----------|--------------|-------------|--------------|-------------------|
 | Raw GAM API | Everything in the account | Full CRUD | Logging only | Poor (SOAP/REST, no MCP) |
 | OpenRTB bid requests | User-level data, floor prices | Bid-only | None | Poor |
-| **This server** | Coarse families + bucket forecasts | None | Hash-chained ledger | Native MCP |
+| **This server** | Coarse families + bucket forecasts | Buyer's own soft commitment only (no GAM writes) | Hash-chained ledger | Native MCP |
 
 ## Current status
 
 Working MVP. The full request pipeline (auth → policy → rate-limit → domain → audit),
+the buyer-scoped commitment primitive (`create_intent` / `revoke_intent`, with TTL expiry),
 the audit ledger, GDPR data-subject-rights toolkit, Docker packaging, HTTP transport,
 and a live interop probe (Python buyer agent simulation) are all implemented and tested.
 
@@ -153,9 +167,12 @@ Key modules:
 **Default-Deny.** Every request is denied unless an explicit entitlement says otherwise — there
 is no "allow by default" path in the code.
 
-**Structural denylist (SEC-GATE-*).** Certain response surfaces — exact pricing, deal IDs, raw
-availability numbers, any write operation — are on a fixed denylist enforced at the policy layer,
-independent of which tool was called. Adding a new tool in the future doesn't bypass this.
+**Structural allow/denylist (SEC-GATE-*).** Response surfaces are governed by a fixed list enforced
+at the policy layer, independent of which tool was called. Exact pricing, deal IDs, raw availability
+numbers, cross-buyer state, real inventory holds (soft-lock), and any ad-server write are permanently
+denied. The one permitted write is a buyer's own commitment (`create_intent` / `revoke_intent`),
+which required an explicit amendment to the surface allowlist and stays buyer-scoped. Adding a new
+tool in the future cannot bypass this.
 
 **Opaque errors.** A denied request, a failed authentication, and a revoked token all return the
 same generic `AUTH_FAILED` code. Internal reasons never reach the buyer.
