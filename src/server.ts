@@ -16,7 +16,7 @@ import { WellKnownService } from "./discovery/well-known.js";
 import { CatalogStore, loadCatalogFromFile } from "./catalog/store.js";
 import { PricingStore, loadPricingFromFile } from "./pricing/store.js";
 import { projectFamily } from "./catalog/projection.js";
-import { IntentStore } from "./intent/store.js";
+import { IntentStore, DEFAULT_INTENT_TTL_MS, DEV_INTENT_PATH } from "./intent/store.js";
 import { RateLimiter } from "./rate-limiter/limiter.js";
 import { ForecastEngine } from "./forecast/engine.js";
 import { loadDeploymentConfigFromFile } from "./config/deployment.js";
@@ -514,8 +514,10 @@ async function main() {
   const forecastRateLimiter = new RateLimiter();
   const replayGuard = new ReplayGuard();
   // Shared commitment store (v0.5 Bloque B) — one instance for the whole process so
-  // intents survive across HTTP connections (buildServer runs per-connection).
-  const intentStore = new IntentStore();
+  // intents survive across HTTP connections (buildServer runs per-connection). File-backed
+  // (issue #50) so a committed intent stays revocable and TTL-auditable across a restart;
+  // a corrupt overlay fails closed on load.
+  const intentStore = new IntentStore(DEFAULT_INTENT_TTL_MS, DEV_INTENT_PATH);
   // Shared create_intent rate limiter (N=1/T=30s) — one instance so the throttle holds
   // across connections, same reason as the discover/forecast limiters above.
   const intentRateLimiter = new RateLimiter();
@@ -543,7 +545,10 @@ async function main() {
 
   // Age out expired intents on a timer, emitting INTENT_EXPIRED (v0.6+ intent lifecycle).
   // Without this the TTL would be advisory: a lapsed commitment would linger as "active" and
-  // its expiry would never be audited.
+  // its expiry would never be audited. Runs once at startup to reconcile intents that lapsed
+  // during downtime (issue #50) — the reloaded set must not leave a dangling INTENT_CREATED
+  // with no terminal event — then on a timer.
+  sweepExpiredIntents(intentStore, ledger);
   setInterval(() => sweepExpiredIntents(intentStore, ledger), INTENT_SWEEP_INTERVAL_MS).unref();
 
   const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, intentStore, intentRateLimiter, metricsRegistry };
