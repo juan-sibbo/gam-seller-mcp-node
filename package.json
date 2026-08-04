@@ -38,8 +38,24 @@
   "engines": {
     "node": ">=22"
   },
+  "bin": {
+    "gam-seller-mcp-node": "dist/server.js"
+  },
+  "main": "dist/server.js",
+  "types": "dist/server.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "PRIVACY.md",
+    "CHANGELOG.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc",
+    "prepublishOnly": "npm run build",
     "typecheck": "tsc -p tsconfig.check.json",
     "start": "node dist/server.js",
     "start:http": "node dist/server.js --http",
