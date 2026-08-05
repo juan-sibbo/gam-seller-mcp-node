@@ -1,5 +1,7 @@
 # GAM Seller MCP Node
 
+[![npm version](https://img.shields.io/npm/v/gam-seller-mcp-node.svg?logo=npm)](https://www.npmjs.com/package/gam-seller-mcp-node)
+[![npm downloads](https://img.shields.io/npm/dm/gam-seller-mcp-node.svg)](https://www.npmjs.com/package/gam-seller-mcp-node)
 [![CI](https://github.com/juan-sibbo/gam-seller-mcp-node/actions/workflows/ci.yml/badge.svg)](https://github.com/juan-sibbo/gam-seller-mcp-node/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
