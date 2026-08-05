@@ -1,0 +1,29 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.juan-sibbo/gam-seller-mcp-node",
+  "description": "Governed, read-only MCP server exposing Google Ad Manager inventory discovery to buyer agents",
+  "repository": {
+    "url": "https://github.com/juan-sibbo/gam-seller-mcp-node",
+    "source": "github"
+  },
+  "version": "0.8.3",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "gam-seller-mcp-node",
+      "version": "0.8.3",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "description": "Directory holding your deployment.json/catalog.json/entitlements.json/pricing.json. Omit it to run the bundled demo.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "MCP_CONFIG_DIR"
+        }
+      ]
+    }
+  ]
+}
