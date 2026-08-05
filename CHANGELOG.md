@@ -282,6 +282,21 @@ by anyone who discovers it. No buyer-facing surface changes, contract stays `0.2
   **absent** config drops to the demo.
 - **npm badges.** README now shows npm version and monthly-downloads badges.
 
+## [0.8.2] — 2026-08-05
+
+Patch release. Fixes a launch bug in 0.8.1: the server never started when run through
+its bin (the intended `npx` path). Contract stays `0.2.0`.
+
+### Fixed
+
+- **`npx gam-seller-mcp-node` now actually starts.** The "run only when executed directly"
+  guard compared `import.meta.url` to `process.argv[1]` by string. Launched via the package
+  bin, `argv[1]` is the `node_modules/.bin` symlink, not the real `dist/server.js`, so the
+  comparison failed, `main()` never ran, and the process exited 0 in silence. The check now
+  resolves symlinks on both sides (`realpathSync`) via a small `isEntrypoint` helper, covered
+  by a regression test that reproduces the symlinked-bin invocation.
+
+[0.8.2]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.2
 [0.8.1]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.1
 [0.8.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.0
 [0.7.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.7.0
