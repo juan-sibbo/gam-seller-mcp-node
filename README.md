@@ -107,6 +107,16 @@ Or run it directly (stdio transport — the default for MCP clients):
 npx -y gam-seller-mcp-node
 ```
 
+> **Demo mode.** With no config of your own, the node boots on a bundled
+> `pilot-publisher` example (illustrative catalog, prices and forecasts) and says so
+> on stderr — it starts instead of failing, so you can try the tools immediately.
+> For a real deployment, point `MCP_CONFIG_DIR` at a directory holding your own
+> `deployment.json`, `catalog.json`, `entitlements.json` and `pricing.json`:
+>
+> ```bash
+> MCP_CONFIG_DIR=/etc/gam-seller/config npx -y gam-seller-mcp-node
+> ```
+
 ### From source
 
 ```bash
@@ -135,18 +145,21 @@ pre-configured in `docker-compose.yml`.
 
 ### Configure for your publisher
 
-Four JSON files under `config/` drive all publisher-specific behaviour — no code changes needed:
+Four JSON files drive all publisher-specific behaviour — no code changes needed. Place them
+in `config/` (from-source) or in the directory named by `MCP_CONFIG_DIR` (npx/containerised):
 
 ```
-config/deployment.json     # DSR contact, controller model, data retention window
-config/catalog.json        # product families + per-buyer access grants
-config/entitlements.json   # which buyers are entitled to which MCP surfaces
-config/pricing.json        # firm list prices per family (optional; fail-closed on expiry)
+deployment.json     # DSR contact, controller model, data retention window
+catalog.json        # product families + per-buyer access grants
+entitlements.json   # which buyers are entitled to which MCP surfaces
+pricing.json        # firm list prices per family (fail-closed on expiry)
 ```
 
-All four fail closed on startup: invalid or missing config stops the node rather than running
-with a silently different access policy. See
-[`config/examples/pilot-publisher/`](config/examples/pilot-publisher/) for a worked example.
+**Invalid** config always fails closed: a malformed file stops the node rather than running
+with a silently different access policy. **Absent** config (no `config/` and no `MCP_CONFIG_DIR`)
+drops to the bundled [`config/examples/pilot-publisher/`](config/examples/pilot-publisher/)
+example — demo mode, announced on stderr — so the node is never a broken install, only ever a
+real deployment or a clearly-labelled demo.
 
 ## Why not just use the GAM API directly?
 

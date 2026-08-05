@@ -1,6 +1,5 @@
 import { readFileSync } from "fs";
-import { fileURLToPath } from "url";
-import { join, dirname } from "path";
+import { resolveConfigPath } from "../config/resolve.js";
 
 // Product family schema — privacy-consent-layer §3 (Pilar 3).
 // consent_context and legal_basis_provenance are reserved empty fields in v1.
@@ -48,12 +47,7 @@ export class CatalogStore {
 }
 
 export function loadCatalogFromFile(configPath?: string): CatalogStore {
-  const path =
-    configPath ??
-    join(
-      dirname(fileURLToPath(import.meta.url)),
-      "../../config/catalog.json"
-    );
+  const path = configPath ?? resolveConfigPath("catalog.json");
   const raw = readFileSync(path, "utf-8");
   return new CatalogStore(JSON.parse(raw) as CatalogConfig);
 }

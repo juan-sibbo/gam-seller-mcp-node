@@ -1,6 +1,5 @@
 import { readFileSync } from "fs";
-import { fileURLToPath } from "url";
-import { join, dirname } from "path";
+import { resolveConfigPath } from "../config/resolve.js";
 
 // Firm list price per product family — DP-AB-01 §5.2 (origin resolved 07/07/26).
 // Publisher-declared, static config, same shape as catalog.json's families. This is
@@ -66,12 +65,7 @@ export class PricingStore {
 }
 
 export function loadPricingFromFile(configPath?: string): PricingStore {
-  const path =
-    configPath ??
-    join(
-      dirname(fileURLToPath(import.meta.url)),
-      "../../config/pricing.json"
-    );
+  const path = configPath ?? resolveConfigPath("pricing.json");
   const raw = readFileSync(path, "utf-8");
   return new PricingStore(JSON.parse(raw) as PricingConfig);
 }
