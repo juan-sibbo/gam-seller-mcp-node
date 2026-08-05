@@ -112,6 +112,11 @@ npx -y gam-seller-mcp-node
 > **Demo mode.** With no config of your own, the node boots on a bundled
 > `pilot-publisher` example (illustrative catalog, prices and forecasts) and says so
 > on stderr — it starts instead of failing, so you can try the tools immediately.
+> Because buyer surfaces always require a token (there is no anonymous path, even in
+> demo), the node **prints a ready-to-use demo buyer token** on startup: copy it and pass
+> it as the `token` argument to `discover_products` / `get_forecast` to see the example
+> families, prices and forecasts.
+>
 > For a real deployment, point `MCP_CONFIG_DIR` at a directory holding your own
 > `deployment.json`, `catalog.json`, `entitlements.json` and `pricing.json`:
 >
