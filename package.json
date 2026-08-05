@@ -1,6 +1,6 @@
 {
   "name": "gam-seller-mcp-node",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "type": "module",
   "license": "MIT",
   "description": "Governed, read-only MCP server exposing Google Ad Manager inventory discovery to buyer agents",

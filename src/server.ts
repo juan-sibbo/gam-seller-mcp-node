@@ -2,7 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { pathToFileURL } from "url";
+import { isEntrypoint } from "./entrypoint.js";
 import { PolicyEngine } from "./policy/engine.js";
 import { EntitlementStore, loadEntitlementsFromFile } from "./policy/entitlements.js";
 import { DEV_DSR_STATE_PATH } from "./policy/dsr-state.js";
@@ -599,7 +599,7 @@ export type { ServerDeps };
 
 // Only boot when executed directly — importing buildServer (tests, tooling) must not
 // start a transport or touch dev data files.
-const isDirectRun = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+const isDirectRun = isEntrypoint(import.meta.url, process.argv[1]);
 if (isDirectRun) {
   main().catch((err: unknown) => {
     process.stderr.write(`Fatal: ${err instanceof Error ? err.message : String(err)}\n`);
