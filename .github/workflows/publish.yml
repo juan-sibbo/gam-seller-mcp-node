@@ -1,0 +1,72 @@
+name: publish
+
+# Release automation. Push a version tag (after bumping package.json + CHANGELOG and
+# merging to main) and this workflow builds, gates on tests, publishes to npm, and
+# publishes the server to the official MCP Registry.
+#
+#   git tag v0.9.0 && git push origin v0.9.0
+#
+# The npm package version comes from package.json (bump it in the release commit — it must
+# equal the tag). server.json's versions are synced from the tag here so they cannot drift.
+#
+# Secrets required:
+#   NPM_TOKEN — a granular npm token with publish rights on gam-seller-mcp-node.
+# The MCP Registry step uses GitHub OIDC (id-token: write) and needs no secret.
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # OIDC → MCP Registry auth + npm provenance
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: "https://registry.npmjs.org"
+
+      - run: npm ci
+
+      # Gate: never publish a broken build.
+      - run: npx tsc -p tsconfig.check.json
+      - run: npx vitest run
+      - run: npm run build
+
+      # Guard: the tag must match package.json (npm publish uses package.json's version).
+      - name: Verify tag matches package.json version
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "Tag v$TAG does not match package.json version $PKG" >&2
+            exit 1
+          fi
+
+      - name: Publish to npm (public, with provenance)
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # --- MCP Registry ---
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Sync server.json version from the tag
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          jq --arg v "$VERSION" '.version = $v | .packages[0].version = $v' server.json > server.tmp
+          mv server.tmp server.json
+
+      - name: Authenticate to MCP Registry (OIDC)
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish to MCP Registry
+        run: ./mcp-publisher publish
