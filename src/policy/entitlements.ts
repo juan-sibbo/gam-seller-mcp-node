@@ -1,6 +1,5 @@
 import { readFileSync } from "fs";
-import { fileURLToPath } from "url";
-import { join, dirname } from "path";
+import { resolveConfigPath } from "../config/resolve.js";
 import type { Entitlement } from "./types.js";
 import { AllowedSurface } from "./types.js";
 import { loadDsrState, saveDsrState, type DsrState } from "./dsr-state.js";
@@ -168,9 +167,7 @@ export function validateEntitlementsConfig(raw: unknown): EntitlementsConfig {
 }
 
 export function loadEntitlementsFromFile(configPath?: string): EntitlementsConfig {
-  const path =
-    configPath ??
-    join(dirname(fileURLToPath(import.meta.url)), "../../config/entitlements.json");
+  const path = configPath ?? resolveConfigPath("entitlements.json");
   const raw = readFileSync(path, "utf-8");
   return validateEntitlementsConfig(JSON.parse(raw));
 }

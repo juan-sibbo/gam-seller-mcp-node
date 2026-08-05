@@ -21,6 +21,7 @@ import { IntentStore, DEFAULT_INTENT_TTL_MS, DEV_INTENT_PATH } from "./intent/st
 import { RateLimiter } from "./rate-limiter/limiter.js";
 import { ForecastEngine } from "./forecast/engine.js";
 import { loadDeploymentConfigFromFile } from "./config/deployment.js";
+import { isDemoMode, demoFallbackFiles } from "./config/resolve.js";
 import { AuditLedger, DEV_LEDGER_PATH } from "./audit/ledger.js";
 import { ReplayGuard } from "./audit/replay.js";
 import { PseudonymService, DEV_PSEUDONYM_KEYS_PATH } from "./audit/pseudonym.js";
@@ -510,6 +511,18 @@ async function main() {
   const catalog = loadCatalogFromFile();
   // Fail-closed: loadPricingFromFile throws on missing/unparseable valid_until (D7).
   const pricingStore = loadPricingFromFile();
+  // Demo mode: no operator config was found, so the node booted on the bundled
+  // pilot-publisher example. Surface this loudly — a real deployment must never run
+  // on demo data unknowingly. Point MCP_CONFIG_DIR at real config/ files to exit it.
+  if (isDemoMode()) {
+    process.stderr.write(
+      `[demo] No operator config found — running on the bundled pilot-publisher example ` +
+        `(${demoFallbackFiles().join(", ")}). This is a DEMO, not a real deployment: the ` +
+        `catalog, prices and forecasts are illustrative. Provide real config by setting ` +
+        `MCP_CONFIG_DIR to a directory with your own deployment.json/catalog.json/` +
+        `entitlements.json/pricing.json.\n`
+    );
+  }
   const rateLimiter = new RateLimiter();
   const forecastEngine = new ForecastEngine();
   const forecastRateLimiter = new RateLimiter();

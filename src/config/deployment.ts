@@ -1,6 +1,5 @@
 import { readFileSync } from "fs";
-import { fileURLToPath } from "url";
-import { join, dirname } from "path";
+import { resolveConfigPath } from "./resolve.js";
 
 // Per-deployment legal configuration — s6-consent-hardening-acts-2026-07-05.md (A2 + A3).
 // Everything the GDPR analysis identified as a LEGAL VARIABLE (who is the controller,
@@ -99,9 +98,7 @@ export function validateDeploymentConfig(raw: unknown): DeploymentConfig {
 }
 
 export function loadDeploymentConfigFromFile(configPath?: string): DeploymentConfig {
-  const path =
-    configPath ??
-    join(dirname(fileURLToPath(import.meta.url)), "../../config/deployment.json");
+  const path = configPath ?? resolveConfigPath("deployment.json");
   const raw = readFileSync(path, "utf-8");
   return validateDeploymentConfig(JSON.parse(raw));
 }

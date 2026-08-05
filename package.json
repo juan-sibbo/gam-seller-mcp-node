@@ -45,6 +45,7 @@
   "types": "dist/server.d.ts",
   "files": [
     "dist",
+    "config/examples",
     "README.md",
     "LICENSE",
     "PRIVACY.md",
