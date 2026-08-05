@@ -86,6 +86,29 @@ a stale or mismatched offer, so an intent can never pin a price the publisher is
 
 ## Quick start
 
+### Install in an MCP client (via npx)
+
+Add the server to your MCP client (Claude Desktop, Claude Code, Cursor, …):
+
+```jsonc
+{
+  "mcpServers": {
+    "gam-seller": {
+      "command": "npx",
+      "args": ["-y", "gam-seller-mcp-node"]
+    }
+  }
+}
+```
+
+Or run it directly (stdio transport — the default for MCP clients):
+
+```bash
+npx -y gam-seller-mcp-node
+```
+
+### From source
+
 ```bash
 git clone https://github.com/juan-sibbo/gam-seller-mcp-node.git
 cd gam-seller-mcp-node
