@@ -1,6 +1,7 @@
 {
   "name": "gam-seller-mcp-node",
-  "version": "0.8.2",
+  "version": "0.8.3",
+  "mcpName": "io.github.juan-sibbo/gam-seller-mcp-node",
   "type": "module",
   "license": "MIT",
   "description": "Governed, read-only MCP server exposing Google Ad Manager inventory discovery to buyer agents",

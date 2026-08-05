@@ -296,6 +296,22 @@ its bin (the intended `npx` path). Contract stays `0.2.0`.
   resolves symlinks on both sides (`realpathSync`) via a small `isEntrypoint` helper, covered
   by a regression test that reproduces the symlinked-bin invocation.
 
+## [0.8.3] — 2026-08-05
+
+Patch release. Makes the demo immediately usable and prepares the package for the official
+MCP Registry. Contract stays `0.2.0`.
+
+### Added
+
+- **One-paste demo.** In demo mode the node now mints and prints a real, signed buyer token
+  for the example buyer (who has catalog access) on startup. Buyer surfaces still require a
+  token — there is no anonymous path, even in demo — but you no longer have to issue one:
+  copy the printed token, pass it as `token`, and `discover_products` / `get_forecast`
+  return the example families, prices and forecasts on the first call.
+- **`mcpName` metadata** (`io.github.juan-sibbo/gam-seller-mcp-node`) so the package can be
+  published to the official MCP Registry.
+
+[0.8.3]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.3
 [0.8.2]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.2
 [0.8.1]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.1
 [0.8.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.0

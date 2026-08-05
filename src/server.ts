@@ -43,6 +43,11 @@ const CONTRACT_VERSION = "0.2.0";
 // A minute is fine: the intent TTL is minutes-to-hours and expiry is not latency-sensitive.
 const INTENT_SWEEP_INTERVAL_MS = 60_000;
 
+// Demo-mode "try me": the buyer that the bundled pilot-publisher example grants catalog
+// access to, and the TTL of the ready-to-use token the node prints on boot in demo mode.
+const DEMO_BUYER_ID = "pilot-buyer-001";
+const DEMO_TOKEN_TTL_SECONDS = 24 * 60 * 60;
+
 interface ServerDeps {
   store: EntitlementStore;
   issuer: TokenIssuer;
@@ -521,6 +526,16 @@ async function main() {
         `catalog, prices and forecasts are illustrative. Provide real config by setting ` +
         `MCP_CONFIG_DIR to a directory with your own deployment.json/catalog.json/` +
         `entitlements.json/pricing.json.\n`
+    );
+    // Immediate "try me": mint a real, signed buyer token for the demo buyer (who has
+    // catalog access in the example entitlements) and print it. The buyer surfaces still
+    // require a valid token — there is no anonymous path, even in demo — but the node hands
+    // you one so `discover_products` / `get_forecast` work on the first call. Demo only.
+    const demoIssuer = new TokenIssuer(keyPair.privateKey, DEMO_TOKEN_TTL_SECONDS);
+    const { token: demoToken } = await demoIssuer.issue(DEMO_BUYER_ID, BUYER_AUD);
+    process.stderr.write(
+      `[demo] Ready-to-use demo buyer token (sub=${DEMO_BUYER_ID}, valid 24h). Pass it as the ` +
+        `\`token\` argument to discover_products / get_forecast:\n${demoToken}\n`
     );
   }
   const rateLimiter = new RateLimiter();
