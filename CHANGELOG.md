@@ -267,6 +267,22 @@ changes, contract stays `0.2.0`.
   `MCP_DATA_DIR` / `MCP_KEYS_DIR` overrides for persistent volumes, and makes the single-instance
   constraint explicit (the rate limiter, replay guard, and intent store are in-memory per process).
 
+## [0.8.1] — 2026-08-05
+
+Patch release. The theme is **installability** — making the published package actually runnable
+by anyone who discovers it. No buyer-facing surface changes, contract stays `0.2.0`.
+
+### Distribution
+
+- **Runs out of the box (demo mode).** `npx gam-seller-mcp-node` with no config previously
+  crashed: the tarball shipped no `config/*.json` and the loaders fail-close on a missing file.
+  The package now bundles a `pilot-publisher` example and, when no operator config is found,
+  boots on it — announced on stderr as a demo — instead of failing. A real deployment points
+  `MCP_CONFIG_DIR` at its own config directory. **Invalid** config still fails closed; only
+  **absent** config drops to the demo.
+- **npm badges.** README now shows npm version and monthly-downloads badges.
+
+[0.8.1]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.1
 [0.8.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.0
 [0.7.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.7.0
 [0.6.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.6.0
