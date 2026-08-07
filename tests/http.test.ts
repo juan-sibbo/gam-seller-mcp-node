@@ -106,7 +106,10 @@ describe("HTTP transport — E-12 canonical route + MCP endpoint", () => {
       {
         makeServer: () => buildServer(deps),
         wellKnown,
-        getHealth: () => buildHealthReport(true, "test-node"),
+        getHealth: () => buildHealthReport(
+          { ledger: true, anchor: true, pseudonym: true, retention: true, denylist: true },
+          "test-node"
+        ),
       },
       { host: "127.0.0.1", port: 0 } // ephemeral port
     );

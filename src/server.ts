@@ -610,8 +610,17 @@ async function main() {
         makeServer: () => buildServer(deps),
         wellKnown,
         metricsRegistry,
-        // Health reflects the shared ledger's live durability flag (v0.6 E1) + node version.
-        getHealth: () => buildHealthReport(ledger.isPersistenceHealthy(), packageVersion()),
+        // Health reflects persistence durability across all 5 disk-backed stores (issue #51).
+        getHealth: () => buildHealthReport(
+          {
+            ledger: ledger.isPersistenceHealthy(),
+            anchor: anchor.isPersistenceHealthy(),
+            pseudonym: pseudonyms.isPersistenceHealthy(),
+            retention: retention.isPersistenceHealthy(),
+            denylist: denylist.isPersistenceHealthy(),
+          },
+          packageVersion()
+        ),
       },
       opts
     );

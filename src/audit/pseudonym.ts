@@ -47,6 +47,7 @@ interface KeyStore {
 export class PseudonymService {
   private readonly keys: Map<string, KeyRecord>;
   private readonly persistPath: string | null;
+  private persistenceHealthy = true;
 
   constructor(persistPath: string | null = null) {
     this.keys = new Map();
@@ -54,6 +55,10 @@ export class PseudonymService {
     if (persistPath) {
       this.load();
     }
+  }
+
+  isPersistenceHealthy(): boolean {
+    return this.persistenceHealthy;
   }
 
   // Deterministic pseudonym for a buyer_id. Creates the buyer's key on first use.
@@ -162,8 +167,11 @@ export class PseudonymService {
       mkdirSync(dirname(this.persistPath), { recursive: true });
       const store: KeyStore = { version: 2, keys: Object.fromEntries(this.keys) };
       writeFileSync(this.persistPath, JSON.stringify(store, null, 2), "utf-8");
-    } catch {
-      process.stderr.write("[pseudonym] WARNING: could not persist key store to disk\n");
+      this.persistenceHealthy = true;
+    } catch (err) {
+      this.persistenceHealthy = false;
+      const reason = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[pseudonym] ERROR: could not persist key store to disk — crypto-shredding durability DEGRADED (${reason})\n`);
     }
   }
 }

@@ -38,6 +38,7 @@ export interface ArchivedSegment {
 export class RetentionService {
   private segments: ArchivedSegment[] = [];
   private readonly persistPath: string | null;
+  private persistenceHealthy = true;
 
   constructor(
     private readonly config: RetentionConfig,
@@ -106,6 +107,10 @@ export class RetentionService {
     return this.config;
   }
 
+  isPersistenceHealthy(): boolean {
+    return this.persistenceHealthy;
+  }
+
   allSegments(): readonly ArchivedSegment[] {
     return this.segments;
   }
@@ -129,8 +134,11 @@ export class RetentionService {
     try {
       mkdirSync(dirname(this.persistPath), { recursive: true });
       writeFileSync(this.persistPath, JSON.stringify(this.segments, null, 2), "utf-8");
-    } catch {
-      process.stderr.write("[retention] WARNING: could not persist archive to disk\n");
+      this.persistenceHealthy = true;
+    } catch (err) {
+      this.persistenceHealthy = false;
+      const reason = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[retention] ERROR: could not persist archive to disk — retention history DEGRADED (${reason})\n`);
     }
   }
 }

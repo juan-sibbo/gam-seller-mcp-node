@@ -22,12 +22,17 @@ export interface AnchorRecord {
 export class HeadHashAnchor {
   private records: AnchorRecord[] = [];
   private readonly persistPath: string | null;
+  private persistenceHealthy = true;
 
   constructor(persistPath: string | null = null) {
     this.persistPath = persistPath;
     if (persistPath) {
       this.load();
     }
+  }
+
+  isPersistenceHealthy(): boolean {
+    return this.persistenceHealthy;
   }
 
   // Anchor the current head hash. Append-only — never deletes or overwrites.
@@ -72,8 +77,11 @@ export class HeadHashAnchor {
       // Append semantics: load existing + push new record + overwrite.
       // Production: use cloud-immutable write instead (never overwrite).
       writeFileSync(this.persistPath, JSON.stringify(this.records, null, 2), "utf-8");
-    } catch {
-      process.stderr.write("[anchor] WARNING: could not persist anchor to disk\n");
+      this.persistenceHealthy = true;
+    } catch (err) {
+      this.persistenceHealthy = false;
+      const reason = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[anchor] ERROR: could not persist anchor to disk — tamper-evidence DEGRADED (${reason})\n`);
     }
   }
 }

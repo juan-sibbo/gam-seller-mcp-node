@@ -21,6 +21,7 @@ export class Denylist {
   // In-memory index: jti → expiresAt (unix ms)
   private readonly mem: Map<string, number>;
   private readonly persistPath: string | null;
+  private persistenceHealthy = true;
 
   constructor(persistPath: string | null = null) {
     this.mem = new Map();
@@ -29,6 +30,10 @@ export class Denylist {
     if (persistPath) {
       this.load();
     }
+  }
+
+  isPersistenceHealthy(): boolean {
+    return this.persistenceHealthy;
   }
 
   add(jti: string, tokenExpiresAt: number): void {
@@ -102,9 +107,11 @@ export class Denylist {
         entries: Array.from(this.mem.entries()).map(([jti, expiresAt]) => ({ jti, expiresAt })),
       };
       writeFileSync(this.persistPath, JSON.stringify(store, null, 2), "utf-8");
-    } catch {
-      // Non-fatal: denylist still works in-memory; log to stderr
-      process.stderr.write("[denylist] WARNING: could not persist denylist to disk\n");
+      this.persistenceHealthy = true;
+    } catch (err) {
+      this.persistenceHealthy = false;
+      const reason = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[denylist] ERROR: could not persist denylist to disk — token revocation DEGRADED (${reason})\n`);
     }
   }
 }
