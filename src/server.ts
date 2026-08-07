@@ -25,7 +25,7 @@ import { isDemoMode, demoFallbackFiles } from "./config/resolve.js";
 import { AuditLedger, DEV_LEDGER_PATH } from "./audit/ledger.js";
 import { ReplayGuard } from "./audit/replay.js";
 import { PseudonymService, DEV_PSEUDONYM_KEYS_PATH } from "./audit/pseudonym.js";
-import { HeadHashAnchor, DEV_ANCHOR_PATH, ANCHOR_INTERVAL_MS } from "./audit/anchor.js";
+import { HeadHashAnchor, verifyAfterRestore, DEV_ANCHOR_PATH, ANCHOR_INTERVAL_MS } from "./audit/anchor.js";
 import { RetentionService, DEV_ARCHIVE_PATH, runRetentionCycle, RETENTION_INTERVAL_MS } from "./audit/retention.js";
 import { EventClass } from "./audit/event.js";
 import { startHttpServer, httpOptionsFromEnv } from "./http.js";
@@ -558,6 +558,20 @@ async function main() {
   const pseudonyms = new PseudonymService(DEV_PSEUDONYM_KEYS_PATH);
   const ledger = new AuditLedger(DEV_LEDGER_PATH, pseudonyms);
   const anchor = new HeadHashAnchor(DEV_ANCHOR_PATH);
+
+  // B3 (Carril B 2026-08-07): verify chain integrity before serving any requests.
+  // Fail-closed: a head-hash mismatch or replay failure means the on-disk ledger is
+  // suspect — refuse to start rather than serve with an untrustworthy audit trail.
+  // First-run case (empty ledger, no anchor) is valid; verifyAfterRestore handles it.
+  const verifyResult = verifyAfterRestore(ledger.headHash(), () => ledger.replayVerify(), anchor);
+  if (!verifyResult.valid) {
+    throw new Error(
+      `[audit] FATAL: ledger integrity check failed on startup (${verifyResult.error}) — ` +
+      `refusing to serve requests with a suspect chain. Investigate the ledger and anchor before restarting.`
+    );
+  }
+  process.stderr.write("[audit] Ledger integrity verified on startup.\n");
+
   anchorHead(ledger, anchor); // anchor whatever survived the previous run
   setInterval(() => anchorHead(ledger, anchor), ANCHOR_INTERVAL_MS).unref();
 

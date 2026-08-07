@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, renameSync, mkdirSync } from "fs";
 import { dirname } from "path";
 import { dataPath } from "../config/paths.js";
 import type { EventClass } from "./event.js";
@@ -149,16 +149,34 @@ export class AuditLedger {
     try {
       const raw = readFileSync(this.persistPath, "utf-8");
       this.entries = JSON.parse(raw) as AuditEvent[];
-    } catch {
-      this.entries = [];
+    } catch (err) {
+      // ENOENT on first run → initialize empty chain (normal path, not an error).
+      if (err instanceof Error && (err as NodeJS.ErrnoException).code === "ENOENT") {
+        this.entries = [];
+        return;
+      }
+      // Any other failure (corrupt JSON, permission error, EISDIR, …) → fail-closed.
+      // Silently resetting to an empty chain would present fabricated history as valid
+      // and discard audit records — worse than refusing to start. Same pattern as
+      // IntentStore, Denylist, DsrState (hardening E, v0.6).
+      throw new Error(
+        `[audit] FATAL: ledger at ${this.persistPath} could not be loaded — ` +
+        `refusing to start with an empty chain. Investigate or remove the file to start fresh. ` +
+        `Cause: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
   }
 
   private save(): void {
     if (!this.persistPath) return;
+    // Atomic write: write to .tmp then rename over the target.
+    // On POSIX, rename(2) is atomic at the FS level — a crash mid-write leaves
+    // either the old file or the new file intact, never a partial file.
+    const tmpPath = `${this.persistPath}.tmp`;
     try {
       mkdirSync(dirname(this.persistPath), { recursive: true });
-      writeFileSync(this.persistPath, JSON.stringify(this.entries, null, 2), "utf-8");
+      writeFileSync(tmpPath, JSON.stringify(this.entries, null, 2), "utf-8");
+      renameSync(tmpPath, this.persistPath);
       this.persistenceHealthy = true;
     } catch (err) {
       // Do NOT swallow: a lost audit write is an integrity event, not a benign warning.

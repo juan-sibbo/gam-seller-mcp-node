@@ -32,6 +32,29 @@ describe("E2 — store paths are CWD-independent (anchored to the module, not th
   });
 });
 
+describe("E3 — ledger fails closed on a corrupt on-disk file (does not silently reset to empty)", () => {
+  let dir: string | undefined;
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = undefined;
+  });
+
+  it("throws on corrupt JSON (not ENOENT) instead of resetting to an empty chain", () => {
+    dir = mkdtempSync(join(tmpdir(), "ledger-corrupt-"));
+    const path = join(dir, "audit-ledger.json");
+    writeFileSync(path, "this is not json");
+    expect(() => new AuditLedger(path)).toThrow(/fail-closed|FATAL|could not be loaded/i);
+  });
+
+  it("initializes an empty chain when the file does not exist yet (first run)", () => {
+    dir = mkdtempSync(join(tmpdir(), "ledger-new-"));
+    const path = join(dir, "audit-ledger.json");
+    // File does not exist — should succeed and start with empty chain.
+    const ledger = new AuditLedger(path);
+    expect(ledger.size()).toBe(0);
+  });
+});
+
 describe("E1 — ledger surfaces a failed persist instead of swallowing it", () => {
   let dir: string | undefined;
   afterEach(() => {
