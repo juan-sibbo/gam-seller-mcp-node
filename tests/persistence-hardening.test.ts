@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { isAbsolute, join } from "path";
 import { AuditLedger, createMemoryLedger, DEV_LEDGER_PATH } from "../src/audit/ledger.js";
@@ -64,12 +64,15 @@ describe("E1 — ledger surfaces a failed persist instead of swallowing it", () 
 
   it("flips persistence health to unhealthy on a write failure, without throwing", () => {
     dir = mkdtempSync(join(tmpdir(), "ledger-health-"));
-    // A FILE where the ledger's parent directory should be → mkdirSync(dirname) fails.
-    const blocker = join(dir, "blocker");
-    writeFileSync(blocker, "x");
-    const badPath = join(blocker, "audit-ledger.json");
+    const ledgerPath = join(dir, "audit-ledger.json");
+    // Block save() by creating a DIRECTORY at the .tmp path that the atomic writer uses.
+    // writeFileSync on an existing directory fails (EISDIR), so save() will catch and flip
+    // the health flag. load() is unaffected: the ledger file itself does not exist yet
+    // (ENOENT → normal first-run empty chain). The old approach of placing a file where
+    // the parent dir should be caused ENOTDIR in load(), which now fails closed (E3).
+    mkdirSync(`${ledgerPath}.tmp`);
 
-    const ledger = new AuditLedger(badPath);
+    const ledger = new AuditLedger(ledgerPath);
     expect(ledger.isPersistenceHealthy()).toBe(true);
 
     // The in-memory append still succeeds (we do not drop the entry)...
