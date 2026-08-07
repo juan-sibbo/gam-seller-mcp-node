@@ -247,6 +247,58 @@ bucket). User-level attributes don't exist in any response path.
 
 See [`docs/DESIGN-PRINCIPLES.md`](docs/DESIGN-PRINCIPLES.md) for the full reasoning.
 
+## Regulatory posture
+
+The AEPD (Spain's data protection authority) published guidelines on agentic AI systems in
+February 2026. The four recommendations most relevant to an ad-inventory node map directly to
+existing design decisions:
+
+| AEPD recommendation | This node |
+|---------------------|-----------|
+| Protection by design and by default | Default-Deny: every surface denied unless an explicit entitlement grants access |
+| Record and document agent actions | Append-only hash-chained audit ledger; every allow/deny recorded before the response is sent |
+| Control what leaves toward third parties, and with what traceability | Structural egress allowlist (SEC-GATE-*); exact pricing, deal IDs and raw availability permanently blocked |
+| Govern agent memory with purpose and retention rules | DSR toolkit (Arts. 15/17/18/20); configurable retention window enforced on the audit ledger |
+
+This alignment is declared machine-readably in the signed well-known document
+(`/.well-known/seller-mcp-capabilities`) under `privacy_posture.regulatory_alignment_declared`:
+`["GDPR", "AEPD-orientaciones-IA-agentica-2026"]`. A buyer agent or auditor can verify it
+cryptographically without trusting this README.
+
+The node does not make legal determinations — whether a given processing has a legitimate basis,
+whether consent is valid, whether a particular treatment is permitted. Those judgements belong to
+the controller (the broadcaster). The node provides the mechanisms; the controller applies the
+criteria. This boundary is what keeps the node's design stable regardless of how the EU Data Act
+negotiations resolve.
+
+## Machine-readable trust anchor
+
+The `/.well-known/seller-mcp-capabilities` endpoint returns an RS256-signed JWT. A buyer agent
+reads and verifies this document before the first authenticated request. The `privacy_posture`
+block inside it is machine-readable and cryptographically bound to the node's keypair:
+
+| Property | Current value | Meaning |
+|----------|--------------|---------|
+| `end_user_personal_data` | `"none"` | No end-user personal data in any response path |
+| `audience_segmentation` | `"not_offered_v1"` | No audience targeting surfaces |
+| `tc_string_consumption` | `"none"` | Node does not consume TC strings (server-to-server, PATH A) |
+| `device_storage_access` | `"none"` | No device storage access (ePrivacy N/A) |
+| `jurisdiction` | `["ES", "EU"]` | Declared operating jurisdiction |
+| `regulatory_alignment_declared` | `["GDPR", "AEPD-orientaciones-IA-agentica-2026"]` | Declared alignment |
+| `dsr_contact` | from `deployment.json` | Contact for data-subject requests |
+| `controller_model` | from `deployment.json` | Publisher's declared controller role |
+| `audit_retention` | from `deployment.json` | Hot/archive retention windows in days/months |
+
+**Not yet in the well-known document** (properties that remain implicit):
+
+- Whether the catalog and forecast data are synthetic or live (`data_source`)
+- Whether head-hash anchoring uses a local file or cloud Object Lock (`anchor_store`)
+- Whether the node is in demo mode or serving a real publisher config (`deployment_mode`)
+
+These properties would allow a buyer agent to programmatically distinguish a demo deployment from a
+production one, and a locally-anchored node from one with external tamper-evidence. They are not
+present in the current version.
+
 ## Testing
 
 ```bash
