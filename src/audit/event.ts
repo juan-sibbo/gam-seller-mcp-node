@@ -40,6 +40,10 @@ export interface AuditEvent {
 }
 
 // Canonical serialization for hashing — field order is deterministic.
+// ADR-4 (decision B, 2026-08-07): buyer_id and request_id are NOT included in this
+// canonical form. Those top-level fields are for query convenience only and are not covered
+// by the chain's tamper-evidence guarantee. buyer_id inside payload IS covered (it enters
+// as the HMAC pseudonym via pseudonymizePayload before append calls hashEntry).
 export function hashEntry(
   seq: number,
   event_class: EventClass,
