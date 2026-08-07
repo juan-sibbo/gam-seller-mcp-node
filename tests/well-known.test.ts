@@ -127,6 +127,27 @@ describe("WellKnownService — signed capability document", () => {
       const doc = await service.verify(signed);
       expect(doc.privacy_posture.posture_version).toBe("1.1");
     });
+
+    it("deployment_mode defaults to 'production' when no mode is passed", async () => {
+      const signed = await service.sign();
+      const doc = await service.verify(signed);
+      expect(doc.privacy_posture.deployment_mode).toBe("production");
+    });
+
+    it("deployment_mode is 'demo' when explicitly set (atomic deployment frontier)", async () => {
+      const { generateDevKeyPair } = await import("../src/identity/jwk.js");
+      const kp = await generateDevKeyPair();
+      const demoService = new WellKnownService(kp.privateKey, kp.publicKey, TEST_DEPLOYMENT_CONFIG, undefined, "demo");
+      const signed = await demoService.sign();
+      const doc = await demoService.verify(signed);
+      expect(doc.privacy_posture.deployment_mode).toBe("demo");
+    });
+
+    it("data_source is 'synthetic' (GAM adapter not yet wired)", async () => {
+      const signed = await service.sign();
+      const doc = await service.verify(signed);
+      expect(doc.privacy_posture.data_source).toBe("synthetic");
+    });
   });
 
   describe("security properties", () => {

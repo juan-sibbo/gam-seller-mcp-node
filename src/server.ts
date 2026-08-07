@@ -507,7 +507,6 @@ async function main() {
   // Buyer→node identity axis (Bloque A): the validator guarding buyer surfaces accepts
   // ONLY buyer bearer tokens (aud=seller-mcp-node), never Domain-2 node↔adapter tokens.
   const validator = new TokenValidator(keyPair.publicKey, denylist, BUYER_ISS, BUYER_AUD);
-  const wellKnown = new WellKnownService(keyPair.privateKey, keyPair.publicKey, deployment);
   // Fail-closed: an invalid entitlements config (unknown surface, empty buyer_id) must
   // prevent startup — loadEntitlementsFromFile throws before anything serves. The persistent
   // DSR overlay is applied on top, so restrictions/erasures exercised via the DSR CLI are
@@ -516,6 +515,12 @@ async function main() {
   const catalog = loadCatalogFromFile();
   // Fail-closed: loadPricingFromFile throws on missing/unparseable valid_until (D7).
   const pricingStore = loadPricingFromFile();
+  // WellKnownService is constructed AFTER all four config files are loaded so that
+  // isDemoMode() reflects the full deployment state — not just whether deployment.json
+  // fell back to demo. The deployment_mode field in the signed well-known document must
+  // be accurate from the first request.
+  const deploymentMode = isDemoMode() ? "demo" : "production";
+  const wellKnown = new WellKnownService(keyPair.privateKey, keyPair.publicKey, deployment, undefined, deploymentMode);
   // Demo mode: no operator config was found, so the node booted on the bundled
   // pilot-publisher example. Surface this loudly — a real deployment must never run
   // on demo data unknowingly. Point MCP_CONFIG_DIR at real config/ files to exit it.

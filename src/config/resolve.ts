@@ -32,6 +32,13 @@ export function resolveConfigPath(fileName: string): string {
   if (existsSync(primary)) {
     return primary;
   }
+  // If the operator has declared an explicit config directory (MCP_CONFIG_DIR set),
+  // treat any missing file as a fail-closed error — never fall back to demo examples.
+  // A partial config (some real, some demo) is worse than a startup failure: it serves
+  // demo entitlements or demo pricing alongside real deployment config, silently.
+  if (process.env.MCP_CONFIG_DIR) {
+    return primary; // caller's readFileSync will throw ENOENT → node refuses to start
+  }
   const example = join(EXAMPLE_DIR, fileName);
   if (existsSync(example)) {
     demoFallbacks.add(fileName);

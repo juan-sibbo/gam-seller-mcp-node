@@ -45,26 +45,32 @@ describe("resolveConfigPath — precedence & demo fallback", () => {
     expect(isDemoMode()).toBe(false);
   });
 
-  it("falls back to the bundled example and flags demo mode when config is absent", async () => {
-    const { resolveConfigPath, isDemoMode, demoFallbackFiles } =
-      await freshResolve();
+  it("returns the primary path (fail-closed) when MCP_CONFIG_DIR is set and file is absent", async () => {
+    // MCP_CONFIG_DIR is set (tmp is empty) but catalog.json is missing.
+    // Must NOT fall back to demo example — partial config + real MCP_CONFIG_DIR is
+    // worse than a startup failure (demo entitlements alongside real deployment config).
+    const { resolveConfigPath, isDemoMode } = await freshResolve();
 
-    // tmp (MCP_CONFIG_DIR) is empty → no catalog.json there → example wins.
-    expect(resolveConfigPath("catalog.json")).toBe(
-      join(EXAMPLE_DIR, "catalog.json")
-    );
-    expect(isDemoMode()).toBe(true);
-    expect(demoFallbackFiles()).toContain("catalog.json");
+    expect(resolveConfigPath("catalog.json")).toBe(join(tmp, "catalog.json"));
+    expect(isDemoMode()).toBe(false);
   });
 
   it("returns the primary path (fail-closed) when neither config nor example exists", async () => {
     const { resolveConfigPath, isDemoMode } = await freshResolve();
 
-    // No such example file → caller's readFileSync must fail closed on this path,
-    // never silently borrow demo data.
     expect(resolveConfigPath("no-such-file.json")).toBe(
       join(tmp, "no-such-file.json")
     );
     expect(isDemoMode()).toBe(false);
+  });
+
+  it("falls back to the bundled example (demo mode) when MCP_CONFIG_DIR is NOT set and no config/ file exists", async () => {
+    // Without MCP_CONFIG_DIR the node falls through to the bundled example.
+    delete process.env.MCP_CONFIG_DIR;
+    const { resolveConfigPath, isDemoMode, demoFallbackFiles } = await freshResolve();
+
+    expect(resolveConfigPath("catalog.json")).toBe(join(EXAMPLE_DIR, "catalog.json"));
+    expect(isDemoMode()).toBe(true);
+    expect(demoFallbackFiles()).toContain("catalog.json");
   });
 });

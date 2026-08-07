@@ -41,6 +41,8 @@ export interface PrivacyPosture {
   controller_model: string;
   audit_retention: { hot_days: number; archive_months: number };
   posture_version: string;
+  deployment_mode: "demo" | "production";
+  data_source: "synthetic" | "live";
 }
 
 const POSTURE_VERSION = "1.1";
@@ -59,7 +61,7 @@ const PATH_A_POSTURE_BASE = {
   consent_context_reserved: true,                    // Pilar 3: field reserved in canonical model
 };
 
-function buildPrivacyPosture(deployment: DeploymentConfig): PrivacyPosture {
+function buildPrivacyPosture(deployment: DeploymentConfig, deploymentMode: "demo" | "production"): PrivacyPosture {
   return {
     ...PATH_A_POSTURE_BASE,
     jurisdiction: [...PATH_A_POSTURE_BASE.jurisdiction],
@@ -68,6 +70,8 @@ function buildPrivacyPosture(deployment: DeploymentConfig): PrivacyPosture {
     controller_model: deployment.controller_model,
     audit_retention: { ...deployment.retention },
     posture_version: POSTURE_VERSION,
+    deployment_mode: deploymentMode,
+    data_source: "synthetic", // GAM ForecastService adapter not yet wired (DP-AB-01 §5.2)
   };
 }
 
@@ -90,9 +94,10 @@ export class WellKnownService {
     private readonly privateKey: CryptoKey,
     private readonly publicKey: CryptoKey,
     deployment: DeploymentConfig,
-    private readonly nodeId = "seller-mcp-node-mvp"
+    private readonly nodeId = "seller-mcp-node-mvp",
+    deploymentMode: "demo" | "production" = "production"
   ) {
-    this.privacyPosture = buildPrivacyPosture(deployment);
+    this.privacyPosture = buildPrivacyPosture(deployment, deploymentMode);
   }
 
   // C2 (Fase C): the well-known endpoint is public and unauthenticated — re-signing RS256
