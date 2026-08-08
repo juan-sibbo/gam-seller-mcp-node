@@ -1,4 +1,4 @@
-# GAM Seller MCP Node
+# Governed MCP seller control-plane prototype for future GAM integration.
 
 [![npm version](https://img.shields.io/npm/v/gam-seller-mcp-node.svg?logo=npm)](https://www.npmjs.com/package/gam-seller-mcp-node)
 [![npm downloads](https://img.shields.io/npm/dm/gam-seller-mcp-node.svg)](https://www.npmjs.com/package/gam-seller-mcp-node)
@@ -7,11 +7,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
 [![MCP](https://img.shields.io/badge/MCP-2024--11--05-green.svg)](https://modelcontextprotocol.io)
 
-**AI buyer agents are about to participate in programmatic advertising. When they do, they need a governed interface to sell-side inventory — one that cannot be tricked into revealing sensitive data, and that cannot execute transactions it shouldn't.**
-
-This is that interface.
-
-A governed [Model Context Protocol](https://modelcontextprotocol.io) server that exposes sell-side ad inventory (Google Ad Manager and compatible systems) to buyer-side AI agents: discovery, firm pricing, and a soft **commitment** primitive. It performs **no writes to the ad server** — the only mutation it allows is a buyer's own soft commitment (a revocable, TTL-bound intent), never a GAM order or an inventory hold. No raw ad-server access. No sensitive data in responses. Every decision audited.
+A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes sell-side ad inventory to buyer-side AI agents: discovery, firm pricing, and a buyer-scoped soft commitment primitive. No writes to an ad server exist. The Google Ad Manager adapter is not yet connected; catalog and forecast data are synthetic.
 
 ---
 
@@ -46,7 +42,7 @@ Buyer agent
     │       Never returns: exact impression counts, CPM curves, floor prices.
     │
     ├── create_intent             ← Commit to a product at its current firm price (with TTL).
-    │       Records a firm, time-boxed buying intent — fail-closed if the price is stale or
+    │       Records a firm, time-boxed buying intent — rejected if the price is stale or
     │       mismatched. NOT a GAM order and NOT an inventory hold; it is the handoff artifact
     │       the classic sales rails pick up. Buyer-scoped: you can only ever commit as yourself.
     │
@@ -80,11 +76,13 @@ Every call flows through the same pipeline before any domain logic runs:
   Response to buyer
 ```
 
-A bug in any gate fails **closed**, not open.
+Each request-path gate rejects on failure. Exception: on startup, a corrupted on-disk audit
+ledger resets to an empty chain rather than blocking service (`audit/ledger.ts:153`).
+Also, `client_request_id` (the replay-guard deduplication key) is optional; requests
+that omit it bypass SEC-GATE-3.
 
 `create_intent` runs the same gates and adds one more before it records anything: the buyer's
-`price_ref` must match the family's current firm price, or the request is rejected — fail-closed on
-a stale or mismatched offer, so an intent can never pin a price the publisher is no longer offering.
+`price_ref` must match the family's current firm price, or the request is rejected.
 
 ## Quick start
 
@@ -178,19 +176,37 @@ real deployment or a clearly-labelled demo.
 
 ## Current status
 
-Working MVP. The full request pipeline (auth → policy → rate-limit → domain → audit),
+Working prototype. The full request pipeline (auth → policy → rate-limit → domain → audit),
 the buyer-scoped commitment primitive (`create_intent` / `revoke_intent`, with TTL expiry),
 the audit ledger, GDPR data-subject-rights toolkit, Docker packaging, HTTP transport,
 and a live interop probe (Python buyer agent simulation) are all implemented and tested.
 
 **Not yet wired**: a live Google Ad Manager connection. The catalog and forecast data are
 synthetic, loaded from local config. The GAM ForecastService SOAP adapter interface exists
-([`src/forecast/source.ts`](src/forecast/source.ts)) and is the next major milestone.
-See the [open issues](https://github.com/juan-sibbo/gam-seller-mcp-node/issues) for the roadmap.
+([`src/forecast/source.ts`](src/forecast/source.ts)) as a stub — it throws on any call until a
+service account is provisioned (DP-AB-01 §5.2). See the
+[open issues](https://github.com/juan-sibbo/gam-seller-mcp-node/issues) for the roadmap.
+
+**Known limitations:**
+
+- The audit ledger chain does not include `buyer_id` or `request_id` in its canonical hash
+  input (`audit/event.ts:43-51`); those fields are stored in the entry but are not covered
+  by the chain's tamper-evidence guarantee.
+- Chain integrity is not verified on startup before the node begins serving requests
+  (`audit/anchor.ts:93-121` implements `verifyAfterRestore()`, which is not called in
+  `main()`).
+- The head-hash anchor is written to a local file using a rewritable `writeFileSync` call
+  (`audit/anchor.ts:68-78`). The code comment acknowledges this is not production-safe; cloud
+  Object Lock storage is the intended target and is not yet implemented.
+- `client_request_id` (replay guard) is optional (`src/server.ts:202`); requests that omit
+  it bypass the SEC-GATE-3 deduplication step.
+- The GDPR DSR CLI scripts (`scripts/dsr.ts`, `scripts/issue-buyer-token.ts`,
+  `scripts/revoke-token.ts`) are available in the source repository but are not included in the
+  npm package distribution.
 
 ## Architecture
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full module map and data-flow diagrams.
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the module map and data-flow diagrams.
 
 Key modules:
 
@@ -199,10 +215,10 @@ Key modules:
 | `src/server.ts` | MCP tool definitions + request pipeline |
 | `src/policy/` | Default-Deny engine, entitlement store, surface allowlist/denylist |
 | `src/identity/` | RS256 key management, token issuance/validation, revocation denylist |
-| `src/audit/` | Hash-chained ledger, HMAC pseudonymization, external anchoring |
+| `src/audit/` | Hash-chained ledger, HMAC pseudonymization, local-file head-hash anchoring |
 | `src/pricing/` | Firm list price store, expiry-aware (fail-closed on stale prices) |
 | `src/forecast/` | Bucket engine + GAM adapter seam (synthetic today) |
-| `src/dsr/` | GDPR Art. 15/17/18/20 data-subject-rights toolkit |
+| `src/dsr/` | GDPR Art. 15/17/18/20 data-subject-rights toolkit (source only) |
 | `src/catalog/` | Product family store, per-buyer access grants |
 
 ## Security model
@@ -221,12 +237,67 @@ tool in the future cannot bypass this.
 same generic `AUTH_FAILED` code. Internal reasons never reach the buyer.
 
 **Audit-first.** Every allow/deny is written to the ledger before the response is sent.
-Buyer `buyer_id` values are pseudonymized (HMAC-SHA256) before entering the chain.
+Buyer `buyer_id` values are pseudonymized (HMAC-SHA256) before entering the chain. Note that
+`buyer_id` and `request_id`, while stored in each audit entry, are not included in the
+hash-chain's canonical input (`audit/event.ts:50`); those fields are not covered by the
+chain's tamper-evidence guarantee.
 
 **Privacy by construction.** Responses carry only inventory-level data (product family, coarse
 bucket). User-level attributes don't exist in any response path.
 
 See [`docs/DESIGN-PRINCIPLES.md`](docs/DESIGN-PRINCIPLES.md) for the full reasoning.
+
+## Regulatory posture
+
+The AEPD (Spain's data protection authority) published guidelines on agentic AI systems in
+February 2026. The four recommendations most relevant to an ad-inventory node map directly to
+existing design decisions:
+
+| AEPD recommendation | This node |
+|---------------------|-----------|
+| Protection by design and by default | Default-Deny: every surface denied unless an explicit entitlement grants access |
+| Record and document agent actions | Append-only hash-chained audit ledger; every allow/deny recorded before the response is sent |
+| Control what leaves toward third parties, and with what traceability | Structural egress allowlist (SEC-GATE-*); exact pricing, deal IDs and raw availability permanently blocked |
+| Govern agent memory with purpose and retention rules | DSR toolkit (Arts. 15/17/18/20); configurable retention window enforced on the audit ledger |
+
+This alignment is declared machine-readably in the signed well-known document
+(`/.well-known/seller-mcp-capabilities`) under `privacy_posture.regulatory_alignment_declared`:
+`["GDPR", "AEPD-orientaciones-IA-agentica-2026"]`. A buyer agent or auditor can verify it
+cryptographically without trusting this README.
+
+The node does not make legal determinations — whether a given processing has a legitimate basis,
+whether consent is valid, whether a particular treatment is permitted. Those judgements belong to
+the controller (the broadcaster). The node provides the mechanisms; the controller applies the
+criteria. This boundary is what keeps the node's design stable regardless of how the EU Data Act
+negotiations resolve.
+
+## Machine-readable trust anchor
+
+The `/.well-known/seller-mcp-capabilities` endpoint returns an RS256-signed JWT. A buyer agent
+reads and verifies this document before the first authenticated request. The `privacy_posture`
+block inside it is machine-readable and cryptographically bound to the node's keypair:
+
+| Property | Current value | Meaning |
+|----------|--------------|---------|
+| `end_user_personal_data` | `"none"` | No end-user personal data in any response path |
+| `audience_segmentation` | `"not_offered_v1"` | No audience targeting surfaces |
+| `tc_string_consumption` | `"none"` | Node does not consume TC strings (server-to-server, PATH A) |
+| `device_storage_access` | `"none"` | No device storage access (ePrivacy N/A) |
+| `jurisdiction` | `["ES", "EU"]` | Declared operating jurisdiction |
+| `regulatory_alignment_declared` | `["GDPR", "AEPD-orientaciones-IA-agentica-2026"]` | Declared alignment |
+| `dsr_contact` | from `deployment.json` | Contact for data-subject requests |
+| `controller_model` | from `deployment.json` | Publisher's declared controller role |
+| `audit_retention` | from `deployment.json` | Hot/archive retention windows in days/months |
+
+**Not yet in the well-known document** (properties that remain implicit):
+
+- Whether the catalog and forecast data are synthetic or live (`data_source`)
+- Whether head-hash anchoring uses a local file or cloud Object Lock (`anchor_store`)
+- Whether the node is in demo mode or serving a real publisher config (`deployment_mode`)
+
+These properties would allow a buyer agent to programmatically distinguish a demo deployment from a
+production one, and a locally-anchored node from one with external tamper-evidence. They are not
+present in the current version.
 
 ## Testing
 
@@ -251,6 +322,11 @@ Raw `buyer_id` values never enter the audit ledger — only an HMAC pseudonym. T
 buyer's audit data (GDPR Art. 15/17/18/20). The node stores nothing about end users; the DSR
 scope is exactly what it records — B2B buyer organization pseudonyms and their request events.
 
+**Distribution note.** The DSR CLI scripts (`scripts/dsr.ts`, `scripts/issue-buyer-token.ts`,
+`scripts/revoke-token.ts`) are present in the source repository but are not included in the
+npm package distribution. Publishers deploying via `npx` or Docker must clone the repository
+to access the DSR CLI.
+
 ## Roadmap
 
 See the [open issues](https://github.com/juan-sibbo/gam-seller-mcp-node/issues) for the full
@@ -258,8 +334,6 @@ roadmap. Highlights:
 
 - **Real GAM adapter** — wire `getAvailabilityForecast` via the ForecastService SOAP API
 - **Buyer agent SDKs** — Python and TypeScript client libraries for the MCP buyer flow
-- **Multi-publisher federation** — let buyer agents discover across multiple seller nodes
-- **OIDC buyer authentication** — replace manual entitlements with federated identity
 - **OpenRTB 3.0 taxonomy** — align `family_id` scheme with IAB standards
 - **Prometheus metrics** — observability endpoint for production deployments
 
