@@ -133,6 +133,28 @@ export class IntentStore {
     return this.byId.size;
   }
 
+  // Every active intent held for a buyer_id. OPERATOR/DSR path (Art. 15/20 export) — NOT a
+  // buyer-facing surface. Buyer isolation still holds at the tool layer (get/revoke are
+  // buyer-scoped); this bulk read is only reachable through the DSR toolkit, never a tool.
+  byBuyer(buyer_id: string): Intent[] {
+    return Array.from(this.byId.values()).filter((intent) => intent.buyer_id === buyer_id);
+  }
+
+  // Erase every intent held for a buyer_id and return the count. DSR erasure (Art. 17):
+  // intents.json is the ONLY store that holds a raw buyer_id, so crypto-shredding the ledger
+  // pseudonym does not reach it — erasure must purge this overlay explicitly. OPERATOR path.
+  purgeBuyer(buyer_id: string): number {
+    let purged = 0;
+    for (const [id, intent] of this.byId) {
+      if (intent.buyer_id === buyer_id) {
+        this.byId.delete(id);
+        purged++;
+      }
+    }
+    if (purged > 0) this.save();
+    return purged;
+  }
+
   // Restore active intents from disk. Intents that lapsed while the node was down are loaded
   // AS-IS (still "active") so the boot expiry sweep emits their INTENT_EXPIRED — the ledger
   // must not end with a dangling INTENT_CREATED and no terminal event (issue #50).

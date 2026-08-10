@@ -21,6 +21,7 @@ import { EntitlementStore, loadEntitlementsFromFile } from "../src/policy/entitl
 import { DEV_DSR_STATE_PATH } from "../src/policy/dsr-state.js";
 import { loadDeploymentConfigFromFile } from "../src/config/deployment.js";
 import { DsrToolkit } from "../src/dsr/toolkit.js";
+import { IntentStore, DEV_INTENT_PATH } from "../src/intent/store.js";
 
 function usage(): never {
   process.stderr.write("Usage: npx tsx scripts/dsr.ts <export|restrict|unrestrict|suppress> <buyer_id>\n");
@@ -37,7 +38,10 @@ const anchor = new HeadHashAnchor(DEV_ANCHOR_PATH);
 const retention = new RetentionService(deployment.retention, anchor, DEV_ARCHIVE_PATH);
 // Real entitlements + persistent DSR overlay: restrict/unrestrict/suppress now survive restart.
 const store = new EntitlementStore(loadEntitlementsFromFile(), DEV_DSR_STATE_PATH);
-const toolkit = new DsrToolkit({ store, ledger, retention });
+// Intent overlay: intents.json is the only store holding a raw buyer_id, so export/suppress
+// must reach it (Art. 15/20 completeness + Art. 17 erasure).
+const intentStore = new IntentStore(undefined, DEV_INTENT_PATH);
+const toolkit = new DsrToolkit({ store, ledger, retention, intentStore });
 
 switch (command) {
   case "export": {
