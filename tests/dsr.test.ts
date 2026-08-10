@@ -11,6 +11,7 @@ import { EventClass } from "../src/audit/event.js";
 import { EntitlementStore, TEST_ENTITLEMENTS_DEMO_CONFIG } from "../src/policy/entitlements.js";
 import { PolicyEngine } from "../src/policy/engine.js";
 import { AllowedSurface } from "../src/policy/types.js";
+import { createMemoryIntentStore } from "../src/intent/store.js";
 
 // S6 F4 — DSR toolkit (gdpr-analysis §Q2): access/portability, restriction, erasure
 
@@ -63,6 +64,53 @@ describe("DsrToolkit — exportBuyer (Art. 15/20)", () => {
     const result = toolkit.exportBuyer(BUYER);
     expect(result.archived_entries.length).toBeGreaterThanOrEqual(1);
     expect(result.hot_ledger_entries.filter((e) => e.event_class === EventClass.BUYER_AUTHENTICATION)).toHaveLength(0);
+  });
+});
+
+describe("DsrToolkit — intent store coverage (Art. 17 completeness)", () => {
+  const PRICE_VALID_UNTIL = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const anIntent = (buyer_id: string, family_id: string) => ({
+    buyer_id, family_id, period: "Q4-2026", firm_price: 5, currency: "EUR",
+    price_valid_until: PRICE_VALID_UNTIL,
+  });
+
+  function withIntents() {
+    const pseudonyms = createMemoryPseudonyms();
+    const ledger = createMemoryLedger(pseudonyms);
+    const store = new EntitlementStore(TEST_ENTITLEMENTS_DEMO_CONFIG);
+    const intentStore = createMemoryIntentStore();
+    const toolkit = new DsrToolkit({ store, ledger, intentStore });
+    return { intentStore, toolkit };
+  }
+
+  it("suppressBuyer purges the subject's intents — no raw buyer_id survives erasure", () => {
+    const { intentStore, toolkit } = withIntents();
+    intentStore.create(anIntent(BUYER, "fam-1"));
+    intentStore.create(anIntent(BUYER, "fam-2"));
+    intentStore.create(anIntent("other-buyer", "fam-3"));
+
+    const result = toolkit.suppressBuyer(BUYER);
+
+    expect(result.intents_purged).toBe(2);
+    expect(intentStore.byBuyer(BUYER)).toHaveLength(0);
+    // Isolation: only the subject's intents are erased.
+    expect(intentStore.byBuyer("other-buyer")).toHaveLength(1);
+  });
+
+  it("exportBuyer includes the subject's active intents (Art. 15/20)", () => {
+    const { intentStore, toolkit } = withIntents();
+    intentStore.create(anIntent(BUYER, "fam-1"));
+    const result = toolkit.exportBuyer(BUYER);
+    expect(result.active_intents).toHaveLength(1);
+    expect(result.active_intents[0].buyer_id).toBe(BUYER);
+  });
+
+  it("suppressBuyer is a no-op on intents when no intent store is wired (back-compat)", () => {
+    const pseudonyms = createMemoryPseudonyms();
+    const ledger = createMemoryLedger(pseudonyms);
+    const store = new EntitlementStore(TEST_ENTITLEMENTS_DEMO_CONFIG);
+    const toolkit = new DsrToolkit({ store, ledger });
+    expect(toolkit.suppressBuyer(BUYER).intents_purged).toBe(0);
   });
 });
 
