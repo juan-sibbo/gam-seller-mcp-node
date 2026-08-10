@@ -252,6 +252,42 @@ describe("server integration — discover_products", () => {
   });
 });
 
+describe("server integration — policy gate on every authenticated surface (#67)", () => {
+  let ctx: TestContext;
+  beforeEach(async () => {
+    ctx = await setupServer();
+  });
+
+  // The registered tool surface, frozen. A new server.tool(...) breaks this assertion,
+  // forcing its author to classify it here — public, or authenticated (and therefore
+  // present in the deny sweep below). This is the structural guard behind the README's
+  // "adding a new tool in the future cannot bypass this": the scope gate is invoked
+  // per-handler (convention), so a test must hold the invariant the code does not.
+  const PUBLIC_TOOLS = ["well_known_capabilities"];
+  const AUTHENTICATED_TOOLS: Array<{ name: string; extra: Record<string, unknown> }> = [
+    { name: "discover_products", extra: {} },
+    { name: "get_forecast", extra: { family_id: "fam-demo-01", period: "Q4-2026" } },
+    { name: "create_intent", extra: { family_id: "fam-demo-01", period: "Q4-2026", price_ref: 1 } },
+    { name: "revoke_intent", extra: { intent_id: "any-id" } },
+  ];
+
+  it("exposes exactly the known tool surface (a new tool must be classified here)", async () => {
+    const { tools } = await ctx.client.listTools();
+    const names = tools.map((t) => t.name).sort();
+    const expected = [...PUBLIC_TOOLS, ...AUTHENTICATED_TOOLS.map((t) => t.name)].sort();
+    expect(names).toEqual(expected);
+  });
+
+  it("denies an authenticated-but-unentitled buyer on EVERY authenticated tool (routes through policy)", async () => {
+    for (const tool of AUTHENTICATED_TOOLS) {
+      const result = await callAuthed(ctx, tool.name, UNKNOWN_BUYER, tool.extra);
+      expect(result.isError, `${tool.name} must fail closed for an unentitled buyer`).toBe(true);
+      const envelope = JSON.parse(firstText(result));
+      expect(envelope.code, `${tool.name} must deny via policy (AUTH_FAILED)`).toBe("AUTH_FAILED");
+    }
+  });
+});
+
 describe("server integration — get_forecast", () => {
   let ctx: TestContext;
   beforeEach(async () => {
