@@ -15,6 +15,7 @@ import { Denylist, DEV_DENYLIST_PATH } from "../src/identity/denylist.js";
 import { AuditLedger, DEV_LEDGER_PATH } from "../src/audit/ledger.js";
 import { PseudonymService, DEV_PSEUDONYM_KEYS_PATH } from "../src/audit/pseudonym.js";
 import { recordTokenRevocation } from "../src/identity/token-audit.js";
+import { HeadHashAnchor, DEV_ANCHOR_PATH } from "../src/audit/anchor.js";
 
 function usage(): never {
   process.stderr.write(
@@ -56,6 +57,11 @@ denylist.add(jti, expiresAtMs);
 // ledger trail. Same persistent ledger + pseudonym keys as the server.
 const ledger = new AuditLedger(DEV_LEDGER_PATH, new PseudonymService(DEV_PSEUDONYM_KEYS_PATH));
 recordTokenRevocation(ledger, { jti, expires_at_ms: expiresAtMs, buyer_id: buyerId });
+
+// Anchor the ledger head after writing to prevent no_anchor_but_non_empty_ledger on next startup
+// (fix for #73/#74 class of bug: CLI writes to ledger without anchoring).
+const anchor = new HeadHashAnchor(DEV_ANCHOR_PATH);
+anchor.anchor(ledger.headHash(), ledger.headSeq());
 
 process.stderr.write(
   `[revoke] jti=${jti} revoked until ${new Date(expiresAtMs).toISOString()} (denylist size=${denylist.size()})\n`
