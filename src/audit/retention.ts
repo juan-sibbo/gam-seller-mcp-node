@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { dirname } from "path";
 import { dataPath } from "../config/paths.js";
+import { DurabilityHealth } from "../durability.js";
 import type { AuditEvent } from "./event.js";
 import { EventClass } from "./event.js";
 import type { AuditLedger } from "./ledger.js";
@@ -38,6 +39,7 @@ export interface ArchivedSegment {
 export class RetentionService {
   private segments: ArchivedSegment[] = [];
   private readonly persistPath: string | null;
+  private readonly durability = new DurabilityHealth("retention", "archive");
 
   constructor(
     private readonly config: RetentionConfig,
@@ -124,13 +126,22 @@ export class RetentionService {
     }
   }
 
+  // True while every disk write has succeeded; false once a persist has failed (see save()).
+  // In-memory archives (no persistPath) are always healthy. Aggregated at /health (issue #51).
+  isPersistenceHealthy(): boolean {
+    return this.durability.isHealthy();
+  }
+
   private save(): void {
     if (!this.persistPath) return;
     try {
       mkdirSync(dirname(this.persistPath), { recursive: true });
       writeFileSync(this.persistPath, JSON.stringify(this.segments, null, 2), "utf-8");
-    } catch {
-      process.stderr.write("[retention] WARNING: could not persist archive to disk\n");
+      this.durability.markHealthy();
+    } catch (err) {
+      // Do NOT swallow: a lost archive write means rotated segments vanish on restart,
+      // breaking retention/storage-limitation evidence. Surface it instead of a WARNING.
+      this.durability.markDegraded(err);
     }
   }
 }

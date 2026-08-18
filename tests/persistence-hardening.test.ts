@@ -3,10 +3,11 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { isAbsolute, join } from "path";
 import { AuditLedger, createMemoryLedger, DEV_LEDGER_PATH } from "../src/audit/ledger.js";
-import { DEV_PSEUDONYM_KEYS_PATH } from "../src/audit/pseudonym.js";
-import { DEV_ANCHOR_PATH } from "../src/audit/anchor.js";
-import { DEV_ARCHIVE_PATH } from "../src/audit/retention.js";
-import { DEV_DENYLIST_PATH } from "../src/identity/denylist.js";
+import { PseudonymService, DEV_PSEUDONYM_KEYS_PATH } from "../src/audit/pseudonym.js";
+import { HeadHashAnchor, DEV_ANCHOR_PATH } from "../src/audit/anchor.js";
+import { RetentionService, DEV_ARCHIVE_PATH } from "../src/audit/retention.js";
+import { Denylist, DEV_DENYLIST_PATH } from "../src/identity/denylist.js";
+import { IntentStore } from "../src/intent/store.js";
 import { DEV_KEYSTORE_PATH } from "../src/identity/keystore.js";
 import { DEV_DSR_STATE_PATH } from "../src/policy/dsr-state.js";
 import { EventClass } from "../src/audit/event.js";
@@ -86,5 +87,93 @@ describe("E1 — ledger surfaces a failed persist instead of swallowing it", () 
     const ledger = createMemoryLedger();
     ledger.append(EventClass.BUYER_AUTHENTICATION, { outcome: "allow" });
     expect(ledger.isPersistenceHealthy()).toBe(true);
+  });
+});
+
+// E1 (extended, issue #51) — the OTHER file-backed stores must surface a failed persist the
+// same way the ledger does (health flag + ERROR), instead of swallowing it as a benign WARNING.
+// Blocking technique: point the store at <dir>/sub/<file> while <dir>/sub does not exist yet
+// (constructor load() → ENOENT → healthy empty), then drop a FILE at <dir>/sub so the next
+// save()'s mkdirSync/writeFileSync fails (EEXIST/ENOTDIR) and is caught.
+describe("E1 (issue #51) — every file-backed store surfaces a failed persist, not just the ledger", () => {
+  let dir: string | undefined;
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = undefined;
+  });
+
+  function blockedStorePath(prefix: string): string {
+    dir = mkdtempSync(join(tmpdir(), prefix));
+    return join(dir, "sub", "store.json");
+  }
+
+  function blockWrites(): void {
+    // Turn the missing "sub" dir into a FILE so the store's next mkdirSync/writeFileSync throws.
+    writeFileSync(join(dir!, "sub"), "x");
+  }
+
+  it("denylist flips to unhealthy when its write is blocked", () => {
+    const denylist = new Denylist(blockedStorePath("denylist-health-"));
+    expect(denylist.isPersistenceHealthy()).toBe(true);
+    blockWrites();
+    denylist.add("jti-1", Date.now() + 60_000);
+    expect(denylist.isPersistenceHealthy()).toBe(false);
+  });
+
+  it("intent store flips to unhealthy when its write is blocked", () => {
+    const intents = new IntentStore(undefined, blockedStorePath("intent-health-"));
+    expect(intents.isPersistenceHealthy()).toBe(true);
+    blockWrites();
+    intents.create({
+      buyer_id: "b1",
+      family_id: "f1",
+      period: "2026-Q1",
+      firm_price: 1.5,
+      currency: "EUR",
+      price_valid_until: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+    expect(intents.isPersistenceHealthy()).toBe(false);
+  });
+
+  it("pseudonym key store flips to unhealthy when its write is blocked", () => {
+    const pseudonyms = new PseudonymService(blockedStorePath("pseudonym-health-"));
+    expect(pseudonyms.isPersistenceHealthy()).toBe(true);
+    blockWrites();
+    pseudonyms.pseudonymize("buyer-1"); // first use mints + persists a per-buyer key
+    expect(pseudonyms.isPersistenceHealthy()).toBe(false);
+  });
+
+  it("anchor flips to unhealthy when its write is blocked", () => {
+    const anchor = new HeadHashAnchor(blockedStorePath("anchor-health-"));
+    expect(anchor.isPersistenceHealthy()).toBe(true);
+    blockWrites();
+    anchor.anchor("deadbeef", 0);
+    expect(anchor.isPersistenceHealthy()).toBe(false);
+  });
+
+  it("retention archive flips to unhealthy when its write is blocked", () => {
+    const path = blockedStorePath("retention-health-");
+    const anchor = new HeadHashAnchor(null); // in-memory anchor, stays healthy
+    const ledger = createMemoryLedger();
+    ledger.append(EventClass.BUYER_AUTHENTICATION, { outcome: "allow" });
+    const retention = new RetentionService({ hot_days: 90, archive_months: 12 }, anchor, path);
+    expect(retention.isPersistenceHealthy()).toBe(true);
+    blockWrites();
+    // Rotate with "now" 200 days ahead so the single entry is past the 90-day hot window.
+    const future = Date.now() + 200 * 24 * 60 * 60 * 1000;
+    const segment = retention.rotate(ledger, future);
+    expect(segment).not.toBeNull();
+    expect(retention.isPersistenceHealthy()).toBe(false);
+  });
+
+  it("all five stores start healthy in-memory (nothing to persist)", () => {
+    expect(new Denylist(null).isPersistenceHealthy()).toBe(true);
+    expect(new IntentStore(undefined, null).isPersistenceHealthy()).toBe(true);
+    expect(new PseudonymService(null).isPersistenceHealthy()).toBe(true);
+    expect(new HeadHashAnchor(null).isPersistenceHealthy()).toBe(true);
+    expect(
+      new RetentionService({ hot_days: 90, archive_months: 12 }, new HeadHashAnchor(null), null)
+        .isPersistenceHealthy()
+    ).toBe(true);
   });
 });

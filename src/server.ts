@@ -605,8 +605,16 @@ async function main() {
         makeServer: () => buildServer(deps),
         wellKnown,
         metricsRegistry,
-        // Health reflects the shared ledger's live durability flag (v0.6 E1) + node version.
-        getHealth: () => buildHealthReport(ledger.isPersistenceHealthy(), packageVersion()),
+        // Health aggregates the durability flag of every file-backed store (v0.6 E1,
+        // extended to all stores per #51): /health is "degraded" if ANY store's last disk
+        // write failed. Per-store detail is on stderr (ERROR), not in the public payload.
+        getHealth: () =>
+          buildHealthReport(
+            [ledger, denylist, intentStore, pseudonyms, anchor, retention].every((s) =>
+              s.isPersistenceHealthy()
+            ),
+            packageVersion()
+          ),
       },
       opts
     );

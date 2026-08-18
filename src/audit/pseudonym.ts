@@ -2,6 +2,7 @@ import { createHmac, randomBytes } from "crypto";
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { dirname } from "path";
 import { dataPath } from "../config/paths.js";
+import { DurabilityHealth } from "../durability.js";
 
 // Buyer pseudonymization for the audit ledger — gdpr-analysis §Q1.2 + acts A1 (05/07/26).
 //
@@ -47,6 +48,7 @@ interface KeyStore {
 export class PseudonymService {
   private readonly keys: Map<string, KeyRecord>;
   private readonly persistPath: string | null;
+  private readonly durability = new DurabilityHealth("pseudonym", "key store");
 
   constructor(persistPath: string | null = null) {
     this.keys = new Map();
@@ -156,14 +158,23 @@ export class PseudonymService {
     }
   }
 
+  // True while every disk write has succeeded; false once a persist has failed (see save()).
+  // In-memory key stores (no persistPath) are always healthy. Aggregated at /health (issue #51).
+  isPersistenceHealthy(): boolean {
+    return this.durability.isHealthy();
+  }
+
   private save(): void {
     if (!this.persistPath) return;
     try {
       mkdirSync(dirname(this.persistPath), { recursive: true });
       const store: KeyStore = { version: 2, keys: Object.fromEntries(this.keys) };
       writeFileSync(this.persistPath, JSON.stringify(store, null, 2), "utf-8");
-    } catch {
-      process.stderr.write("[pseudonym] WARNING: could not persist key store to disk\n");
+      this.durability.markHealthy();
+    } catch (err) {
+      // Do NOT swallow: a lost key-store write means a new per-buyer HMAC key vanishes on
+      // restart — pseudonyms for that buyer would no longer resolve. Surface, don't WARN.
+      this.durability.markDegraded(err);
     }
   }
 }
