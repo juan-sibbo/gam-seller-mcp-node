@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { generateDevKeyPair } from "../src/identity/jwk.js";
-import { WellKnownService, WELL_KNOWN_PATH, WELL_KNOWN_CACHE_TTL_SECONDS } from "../src/discovery/well-known.js";
+import { WellKnownService, WELL_KNOWN_PATH, WELL_KNOWN_CACHE_TTL_SECONDS, deriveNodeId } from "../src/discovery/well-known.js";
 import { TEST_DEPLOYMENT_CONFIG } from "../src/config/deployment.js";
 import type { KeyLike } from "jose";
 
@@ -214,5 +214,28 @@ describe("WellKnownService — signed capability document", () => {
     it("canonical path is /.well-known/seller-mcp-capabilities (e12-signoff §5)", () => {
       expect(WELL_KNOWN_PATH).toBe("/.well-known/seller-mcp-capabilities");
     });
+  });
+});
+
+// DRIFT-REPORT D4: node_id_prefix used to be documented but ignored (every node shared one id).
+// It now flows into the advertised, signed node_id so publishers are distinguishable.
+describe("node_id reflects the deployment's node_id_prefix (D4)", () => {
+  it("defaults to the shared id when no prefix is configured", () => {
+    expect(deriveNodeId(TEST_DEPLOYMENT_CONFIG)).toBe("seller-mcp-node-mvp");
+  });
+
+  it("composes ${prefix}-seller-mcp-node when a prefix is set", () => {
+    expect(deriveNodeId({ ...TEST_DEPLOYMENT_CONFIG, node_id_prefix: "telemadrid" })).toBe(
+      "telemadrid-seller-mcp-node"
+    );
+  });
+
+  it("the derived id appears in the signed, verified document", async () => {
+    const svc = new WellKnownService(privateKey, publicKey, {
+      ...TEST_DEPLOYMENT_CONFIG,
+      node_id_prefix: "canalsur",
+    });
+    const doc = await svc.verify(await svc.sign());
+    expect(doc.node_id).toBe("canalsur-seller-mcp-node");
   });
 });

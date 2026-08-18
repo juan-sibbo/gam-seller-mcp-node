@@ -32,13 +32,22 @@ cp -r config/examples/pilot-publisher config/
 {
   "node_id_prefix": "your-network-name",
   "dsr_contact": "privacy@yourpublisher.com",
-  "controller_model": "sole_controller",
-  "data_retention_days": 90
+  "controller_model": "publisher-controller-node-processor",
+  "controller_name": "Your Publisher Ltd.",
+  "retention": { "hot_days": 90, "archive_months": 12 }
 }
 ```
 
-The node will refuse to start if `dsr_contact` is empty or `data_retention_days` is out of range.
-This is intentional: a node without a valid DSR contact cannot lawfully respond to GDPR requests.
+`node_id_prefix` (optional) sets the node's advertised identity: the signed well-known document
+reports `node_id` as `<node_id_prefix>-seller-mcp-node`, so each publisher's node is
+distinguishable. Omit it to use the shared default id. It must be a DNS-safe slug (lowercase
+letters, digits and hyphens; no leading/trailing hyphen).
+
+The node refuses to start unless the legal config is valid: `dsr_contact` must be a concrete
+contact (no placeholders), `controller_model` must be `operator-controller` or
+`publisher-controller-node-processor`, `controller_name` must be set, and `retention.hot_days` /
+`retention.archive_months` must be positive integers. This is intentional — a node without a
+valid DSR contact cannot lawfully respond to GDPR requests.
 
 ### `config/catalog.json` — product families and buyer access
 
@@ -210,8 +219,10 @@ See [`src/dsr/toolkit.ts`](../src/dsr/toolkit.ts) for the API.
 ## Troubleshooting
 
 **Node refuses to start with "invalid deployment config"**
-Check `config/deployment.json` — `dsr_contact` must be a non-empty string and
-`data_retention_days` must be between 30 and 3650.
+Check `config/deployment.json` — `dsr_contact` must be a concrete non-empty contact,
+`controller_model` must be `operator-controller` or `publisher-controller-node-processor`,
+`controller_name` must be set, and `retention.hot_days` / `retention.archive_months` must be
+positive integers. An optional `node_id_prefix` must be a DNS-safe slug.
 
 **All buyers get AUTH_FAILED**
 Check `config/entitlements.json` — the buyer must have an entry for the surface they're calling
