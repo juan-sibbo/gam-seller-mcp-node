@@ -40,7 +40,8 @@
     "node": ">=22"
   },
   "bin": {
-    "gam-seller-mcp-node": "dist/server.js"
+    "gam-seller-mcp-node": "dist/server.js",
+    "gam-seller-dsr": "dist/dsr/cli.js"
   },
   "main": "dist/server.js",
   "types": "dist/server.d.ts",
