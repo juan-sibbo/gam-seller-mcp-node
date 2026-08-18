@@ -69,10 +69,20 @@ interface ServerDeps {
   // reason as intentStore: main() passes one instance so the throttle holds across
   // connections. Absent → a fresh per-server limiter (fine for single-call tests).
   intentRateLimiter?: RateLimiter;
+  // Per-buyer rate limiter for revoke_intent (C-13). Separate instance from create's so a
+  // revoke never consumes a buyer's create budget (and vice-versa). Optional/shared for the
+  // same reason as intentRateLimiter. Uses a shorter window (see REVOKE_INTENT_RATE_LIMIT_WINDOW_MS).
+  revokeIntentRateLimiter?: RateLimiter;
   // Optional operator metrics. When absent, every handler runs unchanged and no
   // series are recorded — observability is additive, never on the request's critical path.
   metricsRegistry?: MetricsRegistry;
 }
+
+// revoke_intent throttle window (C-13). Deliberately shorter than create's ratified 30s: a
+// buyer must be able to withdraw several of their OWN intents in succession, so revoking is not
+// held to the create quota (that would trap a legitimate multi-revoke). This is defense-in-depth
+// against a tight spam loop — NOT the ratified per-request quota (RATE_LIMIT_WINDOW_MS).
+const REVOKE_INTENT_RATE_LIMIT_WINDOW_MS = 2_000;
 
 function buildServer(deps: ServerDeps): McpServer {
   const { store, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, metricsRegistry } = deps;
@@ -80,6 +90,7 @@ function buildServer(deps: ServerDeps): McpServer {
   // legacy call sites that never touch create_intent working unchanged.
   const intentStore = deps.intentStore ?? new IntentStore();
   const intentRateLimiter = deps.intentRateLimiter ?? new RateLimiter();
+  const revokeIntentRateLimiter = deps.revokeIntentRateLimiter ?? new RateLimiter(REVOKE_INTENT_RATE_LIMIT_WINDOW_MS);
   const policy = new PolicyEngine(store);
 
   // Record a handler's terminal outcome: the labelled call counter plus the current
@@ -445,6 +456,16 @@ function buildServer(deps: ServerDeps): McpServer {
         return authFailedResult(request_id);
       }
 
+      // Anti-abuse (C-13): throttle revoke so the rate-limit stage covers EVERY authenticated
+      // surface — no tool bypasses it. Checked after scope (an auth/scope failure never consumes
+      // rate state, same order as the read tools). Uses a shorter window than create so a buyer
+      // can still withdraw several of their own intents in succession (see the constant).
+      if (!revokeIntentRateLimiter.check(buyer_id)) {
+        metricsRegistry?.increment("mcp_rate_limited_total", { tool: MetricTool.REVOKE_INTENT });
+        recordOutcome(MetricTool.REVOKE_INTENT, ToolOutcome.RATE_LIMITED);
+        return rateLimitedResult(request_id);
+      }
+
       // Buyer-scoped: undefined when the intent is absent, another buyer's, terminal, or lapsed.
       const revoked = intentStore.revoke(intent_id, buyer_id);
       if (!revoked) {
@@ -550,6 +571,9 @@ async function main() {
   // Shared create_intent rate limiter (N=1/T=30s) — one instance so the throttle holds
   // across connections, same reason as the discover/forecast limiters above.
   const intentRateLimiter = new RateLimiter();
+  // Shared revoke_intent rate limiter (C-13) — one instance for the same cross-connection
+  // reason; shorter window than create so withdrawing several of your own intents isn't trapped.
+  const revokeIntentRateLimiter = new RateLimiter(REVOKE_INTENT_RATE_LIMIT_WINDOW_MS);
   // Shared metrics registry — the same instance backs both the tool handlers and the
   // /metrics HTTP route, so counters recorded in-handler are visible at scrape time.
   const metricsRegistry = new MetricsRegistry();
@@ -594,7 +618,7 @@ async function main() {
   sweepExpiredIntents(intentStore, ledger);
   setInterval(() => sweepExpiredIntents(intentStore, ledger), INTENT_SWEEP_INTERVAL_MS).unref();
 
-  const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, intentStore, intentRateLimiter, metricsRegistry };
+  const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, intentStore, intentRateLimiter, revokeIntentRateLimiter, metricsRegistry };
 
   // Fase A: --http serves StreamableHTTP on 127.0.0.1 (external bind = infra act, #8/#10).
   // Default remains stdio for MCP-host usage.
