@@ -34,6 +34,11 @@ export interface DeploymentConfig {
   // v0.4 Bloque A: buyer surfaces require a valid buyer token; identity is derived from
   // token.sub (there is no anonymous path). Declarative posture — see validation below.
   require_auth: boolean;
+  // Optional per-deployment identity prefix (DRIFT-REPORT D4 — the field was documented but
+  // ignored). When set, the node advertises node_id `${node_id_prefix}-seller-mcp-node` in its
+  // signed well-known document, so publishers are distinguishable at the identity level. Absent
+  // → the shared default id. Must be a DNS-safe slug (see validation).
+  node_id_prefix?: string;
 }
 
 const VALID_CONTROLLER_MODELS: ReadonlySet<string> = new Set(Object.values(ControllerModel));
@@ -88,12 +93,27 @@ export function validateDeploymentConfig(raw: unknown): DeploymentConfig {
     );
   }
 
+  // node_id_prefix — DRIFT-REPORT D4. Optional; when present it must be a DNS-safe slug, because
+  // it becomes part of the node_id in the public, RS256-signed well-known document. Invalid →
+  // fail closed (same posture as the other legal fields), rather than silently ignore it.
+  const nodeIdPrefixRaw = cfg["node_id_prefix"];
+  let nodeIdPrefix: string | undefined;
+  if (nodeIdPrefixRaw !== undefined) {
+    if (typeof nodeIdPrefixRaw !== "string" || !/^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$/.test(nodeIdPrefixRaw)) {
+      throw new Error(
+        "deployment config: node_id_prefix must be a DNS-safe slug (lowercase a-z, 0-9, hyphens; 1-40 chars; no leading/trailing hyphen)"
+      );
+    }
+    nodeIdPrefix = nodeIdPrefixRaw;
+  }
+
   return {
     dsr_contact: dsrContact,
     controller_model: controllerModel as ControllerModel,
     controller_name: controllerName,
     retention: { hot_days: hotDays, archive_months: archiveMonths },
     require_auth: requireAuth,
+    node_id_prefix: nodeIdPrefix,
   };
 }
 
