@@ -325,6 +325,24 @@ Patch release. Hardens the HTTP transport against unbounded request bodies. Cont
   The `413` is generic and does not disclose the cap value (soap-fault-redaction §2). MCP
   JSON-RPC calls are small, so valid buyer traffic is unaffected.
 
+## [0.8.5] — 2026-08-22
+
+Patch release. Makes the audit ledger's rotation state durable so a rotated chain still verifies
+after a restart. Contract stays `0.2.0`.
+
+### Hardened
+
+- **Rotation state now survives a restart (ledger on-disk format → v1).** The ledger persisted
+  only its entries, not the rotation cursor (`base_seq` + `carry_prev_hash`) that the automatic
+  retention rotation advances. After a rotation, a restart reloaded the chain with
+  `carry_prev_hash=""`, so the first retained entry verified against the wrong previous hash:
+  `replayVerify` reported a false `chain_break` and the fail-closed startup integrity check
+  refused to boot — a legitimate, rotated ledger would self-report as tampered. The on-disk
+  format is now a versioned wrapper `{ schema_version, base_seq, carry_prev_hash, entries }` that
+  restores the rotation cursor; legacy bare-array ledgers are migrated transparently on load.
+  Pinned by a rotate → persist → reload → `replayVerify` test.
+
+[0.8.5]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.5
 [0.8.4]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.4
 [0.8.3]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.3
 [0.8.2]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.2
