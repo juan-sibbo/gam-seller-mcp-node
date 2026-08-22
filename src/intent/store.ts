@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, renameSync, mkdirSync } from "fs";
 import { dirname } from "path";
 import { dataPath } from "../config/paths.js";
 import { DurabilityHealth } from "../durability.js";
@@ -194,10 +194,16 @@ export class IntentStore {
 
   private save(): void {
     if (!this.persistPath) return;
+    // Atomic write: write to .tmp then rename over the target. On POSIX, rename(2) is atomic at
+    // the FS level, so a crash mid-write leaves either the old file or the new file intact, never
+    // a torn one. This matters because load() is fail-closed on a corrupt intents.json — a torn
+    // write would otherwise block the node from restarting. Mirrors the ledger's atomic save.
+    const tmpPath = `${this.persistPath}.tmp`;
     try {
       mkdirSync(dirname(this.persistPath), { recursive: true });
       const file: IntentStoreFile = { intents: Array.from(this.byId.values()) };
-      writeFileSync(this.persistPath, JSON.stringify(file, null, 2), "utf-8");
+      writeFileSync(tmpPath, JSON.stringify(file, null, 2), "utf-8");
+      renameSync(tmpPath, this.persistPath);
       this.durability.markHealthy();
     } catch (err) {
       // Do NOT swallow: a lost intent write means a committed/revoked intent silently

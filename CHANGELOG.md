@@ -342,6 +342,23 @@ after a restart. Contract stays `0.2.0`.
   restores the rotation cursor; legacy bare-array ledgers are migrated transparently on load.
   Pinned by a rotate → persist → reload → `replayVerify` test.
 
+## [0.8.6] — 2026-08-22
+
+Patch release. Makes the intent store's on-disk write atomic, closing the last non-atomic
+persistence path. Contract stays `0.2.0`.
+
+### Hardened
+
+- **Atomic `intents.json` write (temp file + rename).** `IntentStore.save()` wrote the store
+  with a bare `writeFileSync`, so a crash or `ENOSPC` mid-write could leave a torn `intents.json`.
+  Because `load()` is fail-closed on a corrupt file, a torn write turned into a node that refuses
+  to restart. The write now goes to a `.tmp` file and is renamed over the target — atomic at the
+  FS level on POSIX, so a reader always sees either the old file or the new one, never a partial
+  one. Same pattern the ledger already used; the intent store was the last store still writing
+  non-atomically. Pinned by a test that blocks the temp path and asserts the committed file
+  survives.
+
+[0.8.6]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.6
 [0.8.5]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.5
 [0.8.4]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.4
 [0.8.3]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.3
