@@ -327,21 +327,57 @@ Patch release. Hardens the HTTP transport against unbounded request bodies. Cont
 
 ## [0.8.5] — 2026-08-22
 
-Patch release. Makes the audit ledger's rotation state durable so a rotated chain still verifies
-after a restart. Contract stays `0.2.0`.
+Patch release. Batches the governance + durability work merged since 0.8.4: a structural scope
+gate, per-store durability health, a shippable DSR CLI, a rate limit on the last unthrottled
+surface, and durable ledger rotation state. Contract stays `0.2.0`.
+
+### Added
+
+- **`gam-seller-dsr` CLI bin (#78).** The DSR toolkit ships as an installable binary, so an
+  operator can run Art. 15/17/18/20 data-subject requests without a checkout (DRIFT-REPORT D6).
+
+### Changed
+
+- **Structural scope gate via a `guardedTool` wrapper (#72, C-02).** Every authenticated tool now
+  runs through one uniform prologue — replay → token auth → policy (default-deny) → per-surface
+  rate limit — so a newly registered surface cannot bypass the gate by omission. The guarantee is
+  by construction, not convention.
+- **Durability health surfaced in every store (#77, #51).** A failed disk write in any file-backed
+  store (denylist, intents, pseudonyms, anchor, retention) now flips an observable durability flag
+  aggregated at `/health`, instead of a silent per-store warning — matching the ledger's E1 signal.
 
 ### Hardened
 
-- **Rotation state now survives a restart (ledger on-disk format → v1).** The ledger persisted
-  only its entries, not the rotation cursor (`base_seq` + `carry_prev_hash`) that the automatic
-  retention rotation advances. After a rotation, a restart reloaded the chain with
-  `carry_prev_hash=""`, so the first retained entry verified against the wrong previous hash:
-  `replayVerify` reported a false `chain_break` and the fail-closed startup integrity check
-  refused to boot — a legitimate, rotated ledger would self-report as tampered. The on-disk
-  format is now a versioned wrapper `{ schema_version, base_seq, carry_prev_hash, entries }` that
-  restores the rotation cursor; legacy bare-array ledgers are migrated transparently on load.
+- **`revoke_intent` is now rate-limited (#80, C-13).** The one authenticated surface that lacked a
+  throttle now has one, on a deliberately shorter window (2s) than `create_intent` so a buyer can
+  still withdraw several of their own intents in succession. Every authenticated surface is now
+  throttled — pinned by a cross-surface test that fails if a new tool is wired without a limiter.
+- **Rotation state now survives a restart (ledger on-disk format → v1) (#90, C-07).** The ledger
+  persisted only its entries, not the rotation cursor (`base_seq` + `carry_prev_hash`) that the
+  automatic retention rotation advances. After a rotation, a restart reloaded the chain with
+  `carry_prev_hash=""`, so `replayVerify` reported a false `chain_break` and the fail-closed startup
+  integrity check refused to boot — a legitimate, rotated ledger would self-report as tampered. The
+  on-disk format is now a versioned wrapper `{ schema_version, base_seq, carry_prev_hash, entries }`
+  that restores the rotation cursor; legacy bare-array ledgers are migrated transparently on load.
   Pinned by a rotate → persist → reload → `replayVerify` test.
 
+## [0.8.6] — 2026-08-22
+
+Patch release. Makes the intent store's on-disk write atomic, closing the last non-atomic
+persistence path. Contract stays `0.2.0`.
+
+### Hardened
+
+- **Atomic `intents.json` write (temp file + rename).** `IntentStore.save()` wrote the store
+  with a bare `writeFileSync`, so a crash or `ENOSPC` mid-write could leave a torn `intents.json`.
+  Because `load()` is fail-closed on a corrupt file, a torn write turned into a node that refuses
+  to restart. The write now goes to a `.tmp` file and is renamed over the target — atomic at the
+  FS level on POSIX, so a reader always sees either the old file or the new one, never a partial
+  one. Same pattern the ledger already used; the intent store was the last store still writing
+  non-atomically. Pinned by a test that blocks the temp path and asserts the committed file
+  survives.
+
+[0.8.6]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.6
 [0.8.5]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.5
 [0.8.4]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.4
 [0.8.3]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.3
