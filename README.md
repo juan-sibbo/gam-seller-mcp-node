@@ -76,10 +76,17 @@ Every call flows through the same pipeline before any domain logic runs:
   Response to buyer
 ```
 
-Each request-path gate rejects on failure. Exception: on startup, a corrupted on-disk audit
-ledger resets to an empty chain rather than blocking service (`audit/ledger.ts:153`).
-Also, `client_request_id` (the replay-guard deduplication key) is optional; requests
-that omit it bypass SEC-GATE-3.
+Each request-path gate rejects on failure. Two honest caveats to the diagram above:
+
+- **Rate limit** currently covers the read surfaces and `create_intent`; extending it to
+  `revoke_intent`, so *every* authenticated tool is throttled, is in review (see the
+  limitations table under [Current status](#current-status)).
+- **`client_request_id`** (the replay-guard deduplication key) is optional; a request that omits
+  it bypasses SEC-GATE-3.
+
+A corrupted or tampered on-disk ledger is **detected on startup** and the node refuses to serve
+(fail-closed on load, plus a chain-integrity verify before the first request) rather than
+resetting to an empty chain.
 
 `create_intent` runs the same gates and adds one more before it records anything: the buyer's
 `price_ref` must match the family's current firm price, or the request is rejected.
@@ -187,22 +194,19 @@ synthetic, loaded from local config. The GAM ForecastService SOAP adapter interf
 service account is provisioned (DP-AB-01 §5.2). See the
 [open issues](https://github.com/juan-sibbo/gam-seller-mcp-node/issues) for the roadmap.
 
-**Known limitations:**
+**Known limitations** — dated status. Closed rows are kept on purpose: a limitations list that
+changes state over time is both a proof of honesty and a proof of progress.
 
-- The audit ledger chain does not include `buyer_id` or `request_id` in its canonical hash
-  input (`audit/event.ts:43-51`); those fields are stored in the entry but are not covered
-  by the chain's tamper-evidence guarantee.
-- Chain integrity is not verified on startup before the node begins serving requests
-  (`audit/anchor.ts:93-121` implements `verifyAfterRestore()`, which is not called in
-  `main()`).
-- The head-hash anchor is written to a local file using a rewritable `writeFileSync` call
-  (`audit/anchor.ts:68-78`). The code comment acknowledges this is not production-safe; cloud
-  Object Lock storage is the intended target and is not yet implemented.
-- `client_request_id` (replay guard) is optional (`src/server.ts:202`); requests that omit
-  it bypass the SEC-GATE-3 deduplication step.
-- The GDPR DSR CLI scripts (`scripts/dsr.ts`, `scripts/issue-buyer-token.ts`,
-  `scripts/revoke-token.ts`) are available in the source repository but are not included in the
-  npm package distribution.
+| Limitation | Anchor | Status | Closed by |
+|---|---|---|---|
+| Attribution (`buyer_id` / `request_id`) is stored per entry but sits **outside** the chain's tamper-evidence hash | `audit/event.ts` | Design decision, not a defect — traceability vs. erasability ([ADR-4](docs/adr/ADR-4.md)) | — |
+| Head-hash anchor is a local, rewritable `writeFileSync` — no cloud WORM / Object Lock | `audit/anchor.ts` | **Open** — needs a real deployment target | deployment boundary |
+| `client_request_id` (replay guard) is optional; omitting it bypasses SEC-GATE-3 | `src/server.ts` | **Open** | — |
+| No TLS in transit (a reverse proxy is expected to terminate) | — | **Open** — deployment boundary | — |
+| `revoke_intent` is not covered by the rate-limit stage | `src/server.ts` | **In review** | [#80](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/80) |
+| GDPR DSR CLI (`scripts/dsr.ts`, …) not shipped in the npm package | `package.json` `files` | **In review** | [#78](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/78) |
+| Ledger loaded fail-open — a corrupt file reset to an empty chain | `audit/ledger.ts` | ✅ **Closed** 2026-08-07 | [#65](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/65) |
+| Chain integrity not verified before serving on startup | `src/server.ts` | ✅ **Closed** 2026-08-07 | [#65](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/65) |
 
 ## Architecture
 

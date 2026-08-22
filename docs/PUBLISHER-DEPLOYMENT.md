@@ -198,14 +198,37 @@ RS256 keys are stored in `keys/node.private.jwk.json` (gitignored). To rotate:
 
 ## GDPR / data-subject requests
 
-The node's DSR toolkit handles Art. 15/17/18/20 requests for buyer audit data:
+The node ships a **DSR operator CLI** (`gam-seller-dsr`) that handles Art. 15/17/18/20 requests
+for buyer audit data. It operates on the same file-backed stores the server persists (paths
+honor `MCP_DATA_DIR`), so an erasure is reflected by the node on its next restart — it is not a
+separate copy of the data.
+
+```bash
+# Installed via npm (the bin is on PATH after `npm i -g gam-seller-mcp-node`),
+# or run without a global install straight from the package:
+npx --package gam-seller-mcp-node gam-seller-dsr export <buyer_id>     # Art. 15/20 — portable JSON to stdout
+npx --package gam-seller-mcp-node gam-seller-dsr suppress <buyer_id>   # Art. 17 — crypto-shred + erase entitlement
+npx --package gam-seller-mcp-node gam-seller-dsr restrict <buyer_id>   # Art. 18 — suspend entitlement (record kept)
+npx --package gam-seller-mcp-node gam-seller-dsr unrestrict <buyer_id> # Art. 18 — lift a restriction
+```
+
+In a Docker deployment, invoke the same bin against the node's data volume so it acts on the
+live state:
+
+```bash
+docker run --rm -v mcp-data:/app/data --entrypoint gam-seller-dsr <image> suppress <buyer_id>
+```
+
+To drive the toolkit programmatically from an installed package, import it from the built
+distribution (not `src/`, which is not shipped):
 
 ```typescript
-import { DsrToolkit } from "./src/dsr/toolkit.js";
+import { DsrToolkit } from "gam-seller-mcp-node/dist/dsr/toolkit.js";
 // export, restrict, erase a buyer's pseudonymized audit records
 ```
 
-See [`src/dsr/toolkit.ts`](../src/dsr/toolkit.ts) for the API.
+See [`src/dsr/toolkit.ts`](../src/dsr/toolkit.ts) for the API and [`src/dsr/cli.ts`](../src/dsr/cli.ts)
+for the CLI that wraps it.
 
 ## Troubleshooting
 
