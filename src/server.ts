@@ -184,6 +184,68 @@ function buildServer(deps: ServerDeps): McpServer {
     };
   }
 
+  type ToolResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
+  interface GuardedContext {
+    buyer_id: string;
+    request_id: string;
+  }
+
+  // Register an AUTHENTICATED tool behind the uniform security prologue —
+  // replay (SEC-GATE-3) → token auth (Bloque A) → policy (default-deny) → optional per-surface
+  // rate limit — before the domain handler runs. This makes the gate STRUCTURAL: an
+  // authenticated surface cannot be registered WITHOUT it (there is no raw server.tool path for
+  // authed tools), so the README's "adding a new tool cannot bypass this" holds by construction,
+  // not convention (#67 / C-02). The rate limiter stays per-surface: each tool passes its own
+  // instance (or none — e.g. revoke_intent), so this refactor preserves current behavior exactly.
+  // Only `well_known_capabilities` (public trust anchor) is registered raw, by design.
+  function guardedTool<Args>(
+    name: string,
+    description: string,
+    schema: z.ZodRawShape,
+    guard: { surface: AllowedSurface; metricTool: MetricTool; rateLimiter?: RateLimiter },
+    handle: (args: Args, ctx: GuardedContext) => ToolResult | Promise<ToolResult>
+  ): void {
+    server.tool(name, description, schema, async (args) => {
+      const request_id = randomUUID();
+      const { token, client_request_id } = args as { token?: string; client_request_id?: string };
+
+      // Replay first (SEC-GATE-3) — before auth, so a replay never reaches token validation.
+      if (client_request_id !== undefined) {
+        if (replayGuard.isReplay(client_request_id)) {
+          metricsRegistry?.increment("mcp_replay_rejected_total", { tool: guard.metricTool });
+          recordOutcome(guard.metricTool, ToolOutcome.REPLAY_REJECTED);
+          return replayResult(request_id);
+        }
+        replayGuard.record(client_request_id);
+      }
+
+      // Identity from token.sub, never input (Bloque A: no impersonation surface).
+      const auth = await authenticate(token, guard.surface, request_id);
+      if (!auth) {
+        metricsRegistry?.increment("mcp_auth_failures_total", { tool: guard.metricTool, reason: AuthFailReason.TOKEN_INVALID });
+        recordOutcome(guard.metricTool, ToolOutcome.AUTH_FAILED);
+        return authFailedResult(request_id);
+      }
+      const { buyer_id } = auth;
+
+      // Policy (default-deny) — the allowlist gate.
+      if (!resolveScope(buyer_id, guard.surface, request_id)) {
+        metricsRegistry?.increment("mcp_auth_failures_total", { tool: guard.metricTool, reason: AuthFailReason.SCOPE_DENIED });
+        recordOutcome(guard.metricTool, ToolOutcome.AUTH_FAILED);
+        return authFailedResult(request_id);
+      }
+
+      // Rate limit — per-surface, consumed ONLY on authorized requests. Absent → no throttle.
+      if (guard.rateLimiter && !guard.rateLimiter.check(buyer_id)) {
+        metricsRegistry?.increment("mcp_rate_limited_total", { tool: guard.metricTool });
+        recordOutcome(guard.metricTool, ToolOutcome.RATE_LIMITED);
+        return rateLimitedResult(request_id);
+      }
+
+      return handle(args as Args, { buyer_id, request_id });
+    });
+  }
+
   // /.well-known/seller-mcp-capabilities — e12-discovery-trust-anchor-signoff.md §2 Opción A.
   // PUBLIC BY DESIGN: this document is the trust anchor a buyer verifies BEFORE any
   // authenticated interaction — gating it behind an entitlement would be a bootstrap
@@ -205,50 +267,15 @@ function buildServer(deps: ServerDeps): McpServer {
 
   // Product discovery — adapter-boundary-allowed-surfaces-signoff.md §3 (allowlist MVP surface 2)
   // Order: token auth → policy → rate limit. Rate state is only consumed on authorized requests.
-  server.tool(
+  guardedTool<{ token?: string; client_request_id?: string }>(
     "discover_products",
     "Discover coarse product families available to this buyer.",
     {
       token: z.string().optional().describe("Buyer bearer JWT (RS256, aud=seller-mcp-node). Identity is derived from token.sub."),
       client_request_id: z.string().optional().describe("Client-supplied idempotency key for replay detection"),
     },
-    async ({ token, client_request_id }) => {
-      const request_id = randomUUID();
-
-      // Replay check first (SEC-GATE-3) — before auth, so a replayed request never even
-      // reaches token validation. No client_request_id → no dedupe (back-compat).
-      if (client_request_id !== undefined) {
-        if (replayGuard.isReplay(client_request_id)) {
-          metricsRegistry?.increment("mcp_replay_rejected_total", { tool: MetricTool.DISCOVER_PRODUCTS });
-          recordOutcome(MetricTool.DISCOVER_PRODUCTS, ToolOutcome.REPLAY_REJECTED);
-          return replayResult(request_id);
-        }
-        replayGuard.record(client_request_id);
-      }
-
-      // Identity is derived from the token — null means no/invalid/revoked token.
-      // buyer_id is token.sub, never client input (Bloque A: no impersonation surface).
-      const auth = await authenticate(token, AllowedSurface.PRODUCT_DISCOVERY, request_id);
-      if (!auth) {
-        metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.DISCOVER_PRODUCTS, reason: AuthFailReason.TOKEN_INVALID });
-        recordOutcome(MetricTool.DISCOVER_PRODUCTS, ToolOutcome.AUTH_FAILED);
-        return authFailedResult(request_id);
-      }
-      const buyer_id = auth.buyer_id;
-
-      if (!resolveScope(buyer_id, AllowedSurface.PRODUCT_DISCOVERY, request_id)) {
-        metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.DISCOVER_PRODUCTS, reason: AuthFailReason.SCOPE_DENIED });
-        recordOutcome(MetricTool.DISCOVER_PRODUCTS, ToolOutcome.AUTH_FAILED);
-        return authFailedResult(request_id);
-      }
-
-      // Rate limit check — N=1/T=30s per buyer_id (blocker-#6 §4 RATIFIED).
-      if (!rateLimiter.check(buyer_id)) {
-        metricsRegistry?.increment("mcp_rate_limited_total", { tool: MetricTool.DISCOVER_PRODUCTS });
-        recordOutcome(MetricTool.DISCOVER_PRODUCTS, ToolOutcome.RATE_LIMITED);
-        return rateLimitedResult(request_id);
-      }
-
+    { surface: AllowedSurface.PRODUCT_DISCOVERY, metricTool: MetricTool.DISCOVER_PRODUCTS, rateLimiter },
+    (_args, { buyer_id, request_id }) => {
       // Synthetic catalog from config — zero GAM (S4).
       // Egress no-leak guard (C4): projectFamily copies ONLY the buyer-facing fields by name,
       // never spreads the raw config object — so a sensitive key added to catalog.json can
@@ -266,7 +293,7 @@ function buildServer(deps: ServerDeps): McpServer {
   // Forecast (bucketized, synthetic) — s5-forecast-demo-mode-authorization-2026-07-04.md
   // Returns Low/Mid/High availability bucket. synthetic: true always set in demo mode.
   // Z3: response contains only inventory-level data — no audience attributes.
-  server.tool(
+  guardedTool<{ family_id: string; period: string; token?: string; client_request_id?: string }>(
     "get_forecast",
     "Get a coarse availability forecast (Low/Mid/High) for a product family and period. Demo mode: synthetic data only.",
     {
@@ -275,42 +302,8 @@ function buildServer(deps: ServerDeps): McpServer {
       token: z.string().optional().describe("Buyer bearer JWT (RS256, aud=seller-mcp-node). Identity is derived from token.sub."),
       client_request_id: z.string().optional().describe("Client-supplied idempotency key for replay detection"),
     },
-    async ({ family_id, period, token, client_request_id }) => {
-      const request_id = randomUUID();
-
-      // Replay check first (SEC-GATE-3) — before auth, so a replayed request never even
-      // reaches token validation. No client_request_id → no dedupe (back-compat).
-      if (client_request_id !== undefined) {
-        if (replayGuard.isReplay(client_request_id)) {
-          metricsRegistry?.increment("mcp_replay_rejected_total", { tool: MetricTool.GET_FORECAST });
-          recordOutcome(MetricTool.GET_FORECAST, ToolOutcome.REPLAY_REJECTED);
-          return replayResult(request_id);
-        }
-        replayGuard.record(client_request_id);
-      }
-
-      // Identity derived from the token (Bloque A) — buyer_id is token.sub, never input.
-      const auth = await authenticate(token, AllowedSurface.FORECAST, request_id);
-      if (!auth) {
-        metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.GET_FORECAST, reason: AuthFailReason.TOKEN_INVALID });
-        recordOutcome(MetricTool.GET_FORECAST, ToolOutcome.AUTH_FAILED);
-        return authFailedResult(request_id);
-      }
-      const buyer_id = auth.buyer_id;
-
-      if (!resolveScope(buyer_id, AllowedSurface.FORECAST, request_id)) {
-        metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.GET_FORECAST, reason: AuthFailReason.SCOPE_DENIED });
-        recordOutcome(MetricTool.GET_FORECAST, ToolOutcome.AUTH_FAILED);
-        return authFailedResult(request_id);
-      }
-
-      // Separate rate limiter for forecast — N=1/T=30s (blocker-#6 §4 RATIFIED).
-      if (!forecastRateLimiter.check(buyer_id)) {
-        metricsRegistry?.increment("mcp_rate_limited_total", { tool: MetricTool.GET_FORECAST });
-        recordOutcome(MetricTool.GET_FORECAST, ToolOutcome.RATE_LIMITED);
-        return rateLimitedResult(request_id);
-      }
-
+    { surface: AllowedSurface.FORECAST, metricTool: MetricTool.GET_FORECAST, rateLimiter: forecastRateLimiter },
+    async ({ family_id, period }, { buyer_id, request_id }) => {
       const result = await forecastEngine.forecast(family_id, period);
       // FORECAST_REQUEST payload is minimized: bucket + coarse identifiers only
       // (no raw avails — KANON §Logs-y-Audit).
@@ -329,7 +322,9 @@ function buildServer(deps: ServerDeps): McpServer {
   // with a TTL. NOT a GAM order nor a real inventory hold (SOFT_LOCK_* deferred to Tier 2)
   // — it is the A′-compatible handoff artifact the classic rails pick up. Zero GAM.
   // Order mirrors the read tools: replay → token auth → policy → firm-price fail-closed → emit.
-  server.tool(
+  // Anti-abuse — create_intent is the only write surface, so it throttles per buyer via its
+  // own limiter (intentRateLimiter, N=1/T=30s), passed to the guard below.
+  guardedTool<{ family_id: string; period: string; price_ref: number; token?: string; client_request_id?: string }>(
     "create_intent",
     "Register a firm buying intent over a product family at its current firm price (soft commitment with TTL). Not a GAM order or inventory hold.",
     {
@@ -339,44 +334,8 @@ function buildServer(deps: ServerDeps): McpServer {
       token: z.string().optional().describe("Buyer bearer JWT (RS256, aud=seller-mcp-node). Identity is derived from token.sub."),
       client_request_id: z.string().optional().describe("Client-supplied idempotency key for replay detection"),
     },
-    async ({ family_id, period, price_ref, token, client_request_id }) => {
-      const request_id = randomUUID();
-
-      // Replay check first (SEC-GATE-3) — a replayed create_intent must never create a
-      // second commitment. Request-level dedupe IS the write's idempotency guarantee.
-      if (client_request_id !== undefined) {
-        if (replayGuard.isReplay(client_request_id)) {
-          metricsRegistry?.increment("mcp_replay_rejected_total", { tool: MetricTool.CREATE_INTENT });
-          recordOutcome(MetricTool.CREATE_INTENT, ToolOutcome.REPLAY_REJECTED);
-          return replayResult(request_id);
-        }
-        replayGuard.record(client_request_id);
-      }
-
-      // Identity derived from the token (Bloque A) — buyer_id is token.sub, never input.
-      const auth = await authenticate(token, AllowedSurface.INTENT, request_id);
-      if (!auth) {
-        metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.CREATE_INTENT, reason: AuthFailReason.TOKEN_INVALID });
-        recordOutcome(MetricTool.CREATE_INTENT, ToolOutcome.AUTH_FAILED);
-        return authFailedResult(request_id);
-      }
-      const buyer_id = auth.buyer_id;
-
-      if (!resolveScope(buyer_id, AllowedSurface.INTENT, request_id)) {
-        metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.CREATE_INTENT, reason: AuthFailReason.SCOPE_DENIED });
-        recordOutcome(MetricTool.CREATE_INTENT, ToolOutcome.AUTH_FAILED);
-        return authFailedResult(request_id);
-      }
-
-      // Anti-abuse — create_intent is the only write surface, so it must throttle per buyer
-      // like the read tools (N=1/T=30s). Without this a buyer could flood the in-memory
-      // commitment store. Checked after policy, before any commitment write.
-      if (!intentRateLimiter.check(buyer_id)) {
-        metricsRegistry?.increment("mcp_rate_limited_total", { tool: MetricTool.CREATE_INTENT });
-        recordOutcome(MetricTool.CREATE_INTENT, ToolOutcome.RATE_LIMITED);
-        return rateLimitedResult(request_id);
-      }
-
+    { surface: AllowedSurface.INTENT, metricTool: MetricTool.CREATE_INTENT, rateLimiter: intentRateLimiter },
+    ({ family_id, period, price_ref }, { buyer_id, request_id }) => {
       // Fail-closed on a stale or non-matching firm price (plan §3): priceFor returns
       // undefined when the family is unknown OR its firm price has expired — never commit
       // over a stale offer. A mismatched price_ref is rejected identically, with the same
@@ -419,10 +378,14 @@ function buildServer(deps: ServerDeps): McpServer {
 
   // Revoke one of your OWN active intents (v0.6+ intent lifecycle). Within the already-ratified
   // INTENT surface (write/read-your-own) — revoking is affecting your own state, never another
-  // buyer's. Order: replay → token auth → policy → buyer-scoped revoke → emit INTENT_REVOKED.
+  // buyer's. Order: replay → token auth → policy → rate-limit → buyer-scoped revoke → INTENT_REVOKED.
   // A revoke that matches nothing (unknown id, another buyer's intent, already terminal, or
   // lapsed) returns the same generic INVALID_REQUEST — the buyer cannot probe others' intents.
-  server.tool(
+  // Anti-abuse (C-13): a revokeIntentRateLimiter IS passed so the rate-limit stage covers EVERY
+  // authenticated surface — no tool bypasses it. It uses a deliberately shorter window than create
+  // (2s vs 30s) so a buyer can still withdraw several of their own intents in succession; it is
+  // defense-in-depth, explicitly NOT the ratified per-request quota (RATE_LIMIT_WINDOW_MS).
+  guardedTool<{ intent_id: string; token?: string; client_request_id?: string }>(
     "revoke_intent",
     "Revoke one of your own active intents by id. Idempotent per client_request_id.",
     {
@@ -430,42 +393,8 @@ function buildServer(deps: ServerDeps): McpServer {
       token: z.string().optional().describe("Buyer bearer JWT (RS256, aud=seller-mcp-node). Identity is derived from token.sub."),
       client_request_id: z.string().optional().describe("Client-supplied idempotency key for replay detection"),
     },
-    async ({ intent_id, token, client_request_id }) => {
-      const request_id = randomUUID();
-
-      if (client_request_id !== undefined) {
-        if (replayGuard.isReplay(client_request_id)) {
-          metricsRegistry?.increment("mcp_replay_rejected_total", { tool: MetricTool.REVOKE_INTENT });
-          recordOutcome(MetricTool.REVOKE_INTENT, ToolOutcome.REPLAY_REJECTED);
-          return replayResult(request_id);
-        }
-        replayGuard.record(client_request_id);
-      }
-
-      const auth = await authenticate(token, AllowedSurface.INTENT, request_id);
-      if (!auth) {
-        metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.REVOKE_INTENT, reason: AuthFailReason.TOKEN_INVALID });
-        recordOutcome(MetricTool.REVOKE_INTENT, ToolOutcome.AUTH_FAILED);
-        return authFailedResult(request_id);
-      }
-      const buyer_id = auth.buyer_id;
-
-      if (!resolveScope(buyer_id, AllowedSurface.INTENT, request_id)) {
-        metricsRegistry?.increment("mcp_auth_failures_total", { tool: MetricTool.REVOKE_INTENT, reason: AuthFailReason.SCOPE_DENIED });
-        recordOutcome(MetricTool.REVOKE_INTENT, ToolOutcome.AUTH_FAILED);
-        return authFailedResult(request_id);
-      }
-
-      // Anti-abuse (C-13): throttle revoke so the rate-limit stage covers EVERY authenticated
-      // surface — no tool bypasses it. Checked after scope (an auth/scope failure never consumes
-      // rate state, same order as the read tools). Uses a shorter window than create so a buyer
-      // can still withdraw several of their own intents in succession (see the constant).
-      if (!revokeIntentRateLimiter.check(buyer_id)) {
-        metricsRegistry?.increment("mcp_rate_limited_total", { tool: MetricTool.REVOKE_INTENT });
-        recordOutcome(MetricTool.REVOKE_INTENT, ToolOutcome.RATE_LIMITED);
-        return rateLimitedResult(request_id);
-      }
-
+    { surface: AllowedSurface.INTENT, metricTool: MetricTool.REVOKE_INTENT, rateLimiter: revokeIntentRateLimiter },
+    ({ intent_id }, { buyer_id, request_id }) => {
       // Buyer-scoped: undefined when the intent is absent, another buyer's, terminal, or lapsed.
       const revoked = intentStore.revoke(intent_id, buyer_id);
       if (!revoked) {

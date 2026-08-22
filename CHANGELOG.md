@@ -311,6 +311,21 @@ MCP Registry. Contract stays `0.2.0`.
 - **`mcpName` metadata** (`io.github.juan-sibbo/gam-seller-mcp-node`) so the package can be
   published to the official MCP Registry.
 
+## [0.8.4] — 2026-08-21
+
+Patch release. Hardens the HTTP transport against unbounded request bodies. Contract stays `0.2.0`.
+
+### Hardened
+
+- **Request-body size cap on `POST /mcp` (backpressure / OOM guard).** The HTTP transport
+  buffered the entire request body in memory before parsing, so a single large POST could drive
+  the process to OOM — an unbounded-body vector on the shipped `--http` surface. Bodies are now
+  rejected with `413` the instant they cross `MAX_REQUEST_BODY_BYTES` (256 KiB), enforced while
+  streaming so the guard also holds for chunked bodies with no (or a spoofed) `Content-Length`.
+  The `413` is generic and does not disclose the cap value (soap-fault-redaction §2). MCP
+  JSON-RPC calls are small, so valid buyer traffic is unaffected.
+
+[0.8.4]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.4
 [0.8.3]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.3
 [0.8.2]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.2
 [0.8.1]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.1

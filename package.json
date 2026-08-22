@@ -1,6 +1,6 @@
 {
   "name": "gam-seller-mcp-node",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "mcpName": "io.github.juan-sibbo/gam-seller-mcp-node",
   "type": "module",
   "license": "MIT",
@@ -40,7 +40,8 @@
     "node": ">=22"
   },
   "bin": {
-    "gam-seller-mcp-node": "dist/server.js"
+    "gam-seller-mcp-node": "dist/server.js",
+    "gam-seller-dsr": "dist/dsr/cli.js"
   },
   "main": "dist/server.js",
   "types": "dist/server.d.ts",

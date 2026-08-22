@@ -14,6 +14,7 @@ import { loadOrCreateKeyPair } from "../src/identity/keystore.js";
 import { TokenIssuer } from "../src/identity/issuer.js";
 import { BUYER_AUD } from "../src/identity/types.js";
 import { AuditLedger, DEV_LEDGER_PATH } from "../src/audit/ledger.js";
+import { HeadHashAnchor, DEV_ANCHOR_PATH } from "../src/audit/anchor.js";
 import { PseudonymService, DEV_PSEUDONYM_KEYS_PATH } from "../src/audit/pseudonym.js";
 import { recordTokenIssuance } from "../src/identity/token-audit.js";
 
@@ -31,6 +32,14 @@ const { token, claims } = await issuer.issue(buyerId, BUYER_AUD);
 // uses, so the event is pseudonymized consistently and joins the shared hash chain.
 const ledger = new AuditLedger(DEV_LEDGER_PATH, new PseudonymService(DEV_PSEUDONYM_KEYS_PATH));
 recordTokenIssuance(ledger, { buyer_id: buyerId, jti: claims.jti, aud: claims.aud, exp: claims.exp });
+
+// Anchor the new head so the next server startup's fail-closed integrity check verifies clean.
+// recordTokenIssuance leaves a non-empty ledger; without a matching anchor the server refuses
+// to boot (no_anchor_but_non_empty_ledger). We anchor the head directly (no trailing ANCHORING
+// event) so latestAnchor.head_hash === ledger.headHash() and verifyAfterRestore passes; the
+// server's own anchorHead then no-ops on this head. See issue #73.
+const anchor = new HeadHashAnchor(DEV_ANCHOR_PATH);
+anchor.anchor(ledger.headHash(), ledger.headSeq());
 
 process.stdout.write(token + "\n");
 process.stderr.write(

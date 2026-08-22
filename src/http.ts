@@ -23,6 +23,13 @@ export const MCP_PATH = "/mcp";
 export const METRICS_PATH = "/metrics";
 export const HEALTH_PATH = "/health";
 
+// Maximum accepted request-body size on the /mcp POST surface. MCP JSON-RPC calls are small
+// (a buyer token + a few coarse params), so 256 KiB is generous headroom; the cap bounds the
+// memory a single request can force the process to buffer, closing an unbounded-body OOM /
+// backpressure vector on the HTTP transport. Enforced while streaming, so it also holds for
+// chunked bodies that carry no (or a spoofed) Content-Length.
+export const MAX_REQUEST_BODY_BYTES = 256 * 1024;
+
 // Loopback-only exposure for /metrics. The default bind is 127.0.0.1, but a request
 // can still arrive from elsewhere if the operator binds externally (infra act #8/#10);
 // the metrics surface must never be reachable off-host. Accept IPv4 loopback, IPv6
@@ -61,9 +68,19 @@ interface HttpDeps {
   getHealth?: () => HealthReport;
 }
 
+// Thrown by readJsonBody when the stream crosses MAX_REQUEST_BODY_BYTES. Distinguished from a
+// JSON parse error so the caller can answer 413 (too large) rather than 400 (malformed).
+class PayloadTooLargeError extends Error {}
+
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
+  let total = 0;
   for await (const chunk of req) {
+    total += (chunk as Buffer).length;
+    // Fail fast the instant the cap is crossed — never accumulate an unbounded body in memory.
+    if (total > MAX_REQUEST_BODY_BYTES) {
+      throw new PayloadTooLargeError();
+    }
     chunks.push(chunk as Buffer);
   }
   if (chunks.length === 0) return undefined;
@@ -137,7 +154,12 @@ export async function startHttpServer(deps: HttpDeps, opts: HttpOptions): Promis
       if (req.method === "POST") {
         try {
           body = await readJsonBody(req);
-        } catch {
+        } catch (err) {
+          if (err instanceof PayloadTooLargeError) {
+            // Generic 413 — do not echo the cap value (soap-fault-redaction §2).
+            jsonRpcError(res, 413, -32600, "Request too large");
+            return;
+          }
           jsonRpcError(res, 400, -32700, "Parse error");
           return;
         }
