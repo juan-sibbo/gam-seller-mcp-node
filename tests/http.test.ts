@@ -7,7 +7,7 @@ import { join } from "path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { buildServer } from "../src/server.js";
-import { startHttpServer, httpOptionsFromEnv, MCP_PATH, HEALTH_PATH } from "../src/http.js";
+import { startHttpServer, httpOptionsFromEnv, MCP_PATH, HEALTH_PATH, MAX_REQUEST_BODY_BYTES } from "../src/http.js";
 import { buildHealthReport } from "../src/health.js";
 import { loadOrCreateKeyPair } from "../src/identity/keystore.js";
 import { generateDevKeyPair, type KeyPairBundle } from "../src/identity/jwk.js";
@@ -133,6 +133,31 @@ describe("HTTP transport — E-12 canonical route + MCP endpoint", () => {
     expect(res.headers.get("cache-control")).toBe("no-store");
     const body = await res.json();
     expect(body).toEqual({ status: "ok", version: "test-node", persistence_healthy: true });
+  });
+
+  it("POST /mcp rejects an over-sized request body with 413 (backpressure / OOM guard)", async () => {
+    // A body past the cap must be refused BEFORE it is fully buffered or parsed — the guard
+    // bounds the memory a single request can force the process to hold. Generic 413, cap value
+    // not disclosed (soap-fault-redaction §2). One byte over the limit is enough to trip it.
+    const oversized = "x".repeat(MAX_REQUEST_BODY_BYTES + 1);
+    const res = await fetch(baseUrl + MCP_PATH, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+      body: oversized,
+    });
+    expect(res.status).toBe(413);
+  });
+
+  it("POST /mcp still accepts a normal-sized (sub-cap) body — the cap does not reject valid calls", async () => {
+    // A well-formed but non-initialize JSON-RPC body under the cap must pass the size gate and
+    // reach session routing (→ 400 "no valid session"), proving 413 is about SIZE, not content.
+    const res = await fetch(baseUrl + MCP_PATH, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    expect(res.status).toBe(400);
+    expect(res.status).not.toBe(413);
   });
 
   it("well-known Cache-Control honors the ratified ≤15 min buyer-side TTL (e12 §6)", async () => {
