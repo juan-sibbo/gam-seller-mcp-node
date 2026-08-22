@@ -18,6 +18,33 @@ import { PseudonymService, createMemoryPseudonyms } from "./pseudonym.js";
 //   archived without breaking replayVerify — the first retained entry verifies against
 //   the hash carried over from the last archived entry.
 
+// On-disk ledger format. v1 wraps the entries with the rotation state (base_seq +
+// carry_prev_hash) so a rotated chain still verifies after a restart (C-07/C-18): the first
+// RETAINED entry must check against the persisted carry hash, not "". Persisting only the
+// entries (the pre-v1 shape) lost that state, so after a retention rotation + reload replayVerify
+// returned a false chain_break — which the fail-closed startup verify turns into a refusal to
+// boot. A legacy bare-array file is migrated on load; the version field lets future formats
+// migrate without breaking historical chain verification.
+const LEDGER_SCHEMA_VERSION = 1;
+
+interface LedgerFileV1 {
+  schema_version: number;
+  base_seq: number;
+  carry_prev_hash: string;
+  entries: AuditEvent[];
+}
+
+function isLedgerFileV1(v: unknown): v is LedgerFileV1 {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return (
+    o.schema_version === LEDGER_SCHEMA_VERSION &&
+    typeof o.base_seq === "number" &&
+    typeof o.carry_prev_hash === "string" &&
+    Array.isArray(o.entries)
+  );
+}
+
 export class AuditLedger {
   private entries: AuditEvent[] = [];
   private readonly persistPath: string | null;
@@ -146,25 +173,59 @@ export class AuditLedger {
 
   private load(): void {
     if (!this.persistPath) return;
+    let raw: string;
     try {
-      const raw = readFileSync(this.persistPath, "utf-8");
-      this.entries = JSON.parse(raw) as AuditEvent[];
+      raw = readFileSync(this.persistPath, "utf-8");
     } catch (err) {
       // ENOENT on first run → initialize empty chain (normal path, not an error).
       if (err instanceof Error && (err as NodeJS.ErrnoException).code === "ENOENT") {
         this.entries = [];
         return;
       }
-      // Any other failure (corrupt JSON, permission error, EISDIR, …) → fail-closed.
-      // Silently resetting to an empty chain would present fabricated history as valid
-      // and discard audit records — worse than refusing to start. Same pattern as
-      // IntentStore, Denylist, DsrState (hardening E, v0.6).
+      // Any other read failure (permission error, EISDIR, …) → fail-closed. Silently
+      // resetting to an empty chain would present fabricated history as valid and discard
+      // audit records — worse than refusing to start (hardening E, v0.6).
       throw new Error(
         `[audit] FATAL: ledger at ${this.persistPath} could not be loaded — ` +
         `refusing to start with an empty chain. Investigate or remove the file to start fresh. ` +
         `Cause: ${err instanceof Error ? err.message : String(err)}`
       );
     }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      throw new Error(
+        `[audit] FATAL: ledger at ${this.persistPath} could not be loaded (invalid JSON) — ` +
+        `refusing to start with an empty chain. Investigate or remove the file to start fresh. ` +
+        `Cause: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+
+    // Legacy v0 (bare entries array, pre rotation-state persistence). base_seq/carry_prev_hash
+    // were never persisted then, so an un-rotated legacy ledger restores exactly; one that had
+    // rotated is already lossy and replayVerify will flag it (fail-closed) — the correct outcome.
+    if (Array.isArray(parsed)) {
+      this.entries = parsed as AuditEvent[];
+      this.baseSeq = 0;
+      this.carryPrevHash = "";
+      return;
+    }
+
+    // v1: rotation state is durable, so replayVerify holds across a rotate→restart boundary.
+    if (isLedgerFileV1(parsed)) {
+      this.entries = parsed.entries;
+      this.baseSeq = parsed.base_seq;
+      this.carryPrevHash = parsed.carry_prev_hash;
+      return;
+    }
+
+    // Unrecognized/newer schema or a malformed object → fail-closed.
+    throw new Error(
+      `[audit] FATAL: ledger at ${this.persistPath} could not be loaded (unrecognized on-disk format) — ` +
+      `refusing to start. Investigate or remove the file to start fresh.`
+    );
   }
 
   private save(): void {
@@ -175,7 +236,15 @@ export class AuditLedger {
     const tmpPath = `${this.persistPath}.tmp`;
     try {
       mkdirSync(dirname(this.persistPath), { recursive: true });
-      writeFileSync(tmpPath, JSON.stringify(this.entries, null, 2), "utf-8");
+      // Persist the rotation state alongside the entries (C-07/C-18): without base_seq and
+      // carry_prev_hash a rotated chain fails replayVerify after a reload.
+      const file: LedgerFileV1 = {
+        schema_version: LEDGER_SCHEMA_VERSION,
+        base_seq: this.baseSeq,
+        carry_prev_hash: this.carryPrevHash,
+        entries: this.entries,
+      };
+      writeFileSync(tmpPath, JSON.stringify(file, null, 2), "utf-8");
       renameSync(tmpPath, this.persistPath);
       this.persistenceHealthy = true;
     } catch (err) {
