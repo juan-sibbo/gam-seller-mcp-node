@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { dirname } from "path";
 import { dataPath } from "../config/paths.js";
+import { DurabilityHealth } from "../durability.js";
 
 // External head-hash anchoring — decision-package Bloque 2 §2.1 + §2.2.
 // Ratified: cloud-immutable (Object Lock) destination; 60-min batch; head-hash-first verify.
@@ -22,6 +23,7 @@ export interface AnchorRecord {
 export class HeadHashAnchor {
   private records: AnchorRecord[] = [];
   private readonly persistPath: string | null;
+  private readonly durability = new DurabilityHealth("anchor", "anchor");
 
   constructor(persistPath: string | null = null) {
     this.persistPath = persistPath;
@@ -65,6 +67,12 @@ export class HeadHashAnchor {
     }
   }
 
+  // True while every disk write has succeeded; false once a persist has failed (see save()).
+  // In-memory anchors (no persistPath) are always healthy. Aggregated at /health (issue #51).
+  isPersistenceHealthy(): boolean {
+    return this.durability.isHealthy();
+  }
+
   private save(): void {
     if (!this.persistPath) return;
     try {
@@ -72,8 +80,11 @@ export class HeadHashAnchor {
       // Append semantics: load existing + push new record + overwrite.
       // Production: use cloud-immutable write instead (never overwrite).
       writeFileSync(this.persistPath, JSON.stringify(this.records, null, 2), "utf-8");
-    } catch {
-      process.stderr.write("[anchor] WARNING: could not persist anchor to disk\n");
+      this.durability.markHealthy();
+    } catch (err) {
+      // Do NOT swallow: a lost anchor write means the external tamper-evidence for the
+      // ledger head is not persisted — surface it (health flag + ERROR), never a WARNING.
+      this.durability.markDegraded(err);
     }
   }
 }

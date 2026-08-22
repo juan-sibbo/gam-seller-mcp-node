@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { dirname } from "path";
 import { dataPath } from "../config/paths.js";
+import { DurabilityHealth } from "../durability.js";
 
 // Durable denylist for JWT jti revocation — domain2-identity-signoff §4b + §6.
 // Domain-2 revocation SLO ≤ 15 min: denylist must propagate within that window.
@@ -21,6 +22,7 @@ export class Denylist {
   // In-memory index: jti → expiresAt (unix ms)
   private readonly mem: Map<string, number>;
   private readonly persistPath: string | null;
+  private readonly durability = new DurabilityHealth("denylist", "denylist");
 
   constructor(persistPath: string | null = null) {
     this.mem = new Map();
@@ -94,6 +96,12 @@ export class Denylist {
     }
   }
 
+  // True while every disk write has succeeded; false once a persist has failed (see save()).
+  // In-memory denylists (no persistPath) are always healthy. Aggregated at /health (issue #51).
+  isPersistenceHealthy(): boolean {
+    return this.durability.isHealthy();
+  }
+
   private save(): void {
     if (!this.persistPath) return;
     try {
@@ -102,9 +110,11 @@ export class Denylist {
         entries: Array.from(this.mem.entries()).map(([jti, expiresAt]) => ({ jti, expiresAt })),
       };
       writeFileSync(this.persistPath, JSON.stringify(store, null, 2), "utf-8");
-    } catch {
-      // Non-fatal: denylist still works in-memory; log to stderr
-      process.stderr.write("[denylist] WARNING: could not persist denylist to disk\n");
+      this.durability.markHealthy();
+    } catch (err) {
+      // Do NOT swallow: a lost denylist write means a revoked jti silently un-revokes on
+      // restart (a token PREVAILS again) — a security regression, not a benign WARNING.
+      this.durability.markDegraded(err);
     }
   }
 }

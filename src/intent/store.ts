@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { dirname } from "path";
 import { dataPath } from "../config/paths.js";
+import { DurabilityHealth } from "../durability.js";
 
 // File-backed store of buyer commitments — v0.5 Bloque B (plan-core-v04 §3).
 // An Intent records that an AUTHENTICATED buyer expressed firm intent over a product
@@ -55,6 +56,7 @@ export class IntentStore {
   private readonly byId = new Map<string, Intent>();
   private readonly ttlMs: number;
   private readonly persistPath: string | null;
+  private readonly durability = new DurabilityHealth("intent", "intent store");
 
   // persistPath: when set, active intents are file-backed and survive a restart (issue #50 —
   // a v0.7 revoke_intent handle is only durable if the state behind it is). null → in-memory
@@ -184,15 +186,23 @@ export class IntentStore {
     }
   }
 
+  // True while every disk write has succeeded; false once a persist has failed (see save()).
+  // In-memory stores (no persistPath) are always healthy. Aggregated at /health (issue #51).
+  isPersistenceHealthy(): boolean {
+    return this.durability.isHealthy();
+  }
+
   private save(): void {
     if (!this.persistPath) return;
     try {
       mkdirSync(dirname(this.persistPath), { recursive: true });
       const file: IntentStoreFile = { intents: Array.from(this.byId.values()) };
       writeFileSync(this.persistPath, JSON.stringify(file, null, 2), "utf-8");
-    } catch {
-      // Non-fatal: the store still works in-memory this run — same degradation as the denylist.
-      process.stderr.write("[intent] WARNING: could not persist intent store to disk\n");
+      this.durability.markHealthy();
+    } catch (err) {
+      // Do NOT swallow: a lost intent write means a committed/revoked intent silently
+      // reverts on restart. Surface it (health flag + ERROR) instead of a benign WARNING.
+      this.durability.markDegraded(err);
     }
   }
 }
