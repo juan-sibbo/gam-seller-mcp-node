@@ -69,10 +69,20 @@ interface ServerDeps {
   // reason as intentStore: main() passes one instance so the throttle holds across
   // connections. Absent → a fresh per-server limiter (fine for single-call tests).
   intentRateLimiter?: RateLimiter;
+  // Per-buyer rate limiter for revoke_intent (C-13). Separate instance from create's so a
+  // revoke never consumes a buyer's create budget (and vice-versa). Optional/shared for the
+  // same reason as intentRateLimiter. Uses a shorter window (see REVOKE_INTENT_RATE_LIMIT_WINDOW_MS).
+  revokeIntentRateLimiter?: RateLimiter;
   // Optional operator metrics. When absent, every handler runs unchanged and no
   // series are recorded — observability is additive, never on the request's critical path.
   metricsRegistry?: MetricsRegistry;
 }
+
+// revoke_intent throttle window (C-13). Deliberately shorter than create's ratified 30s: a
+// buyer must be able to withdraw several of their OWN intents in succession, so revoking is not
+// held to the create quota (that would trap a legitimate multi-revoke). This is defense-in-depth
+// against a tight spam loop — NOT the ratified per-request quota (RATE_LIMIT_WINDOW_MS).
+const REVOKE_INTENT_RATE_LIMIT_WINDOW_MS = 2_000;
 
 function buildServer(deps: ServerDeps): McpServer {
   const { store, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, metricsRegistry } = deps;
@@ -80,6 +90,7 @@ function buildServer(deps: ServerDeps): McpServer {
   // legacy call sites that never touch create_intent working unchanged.
   const intentStore = deps.intentStore ?? new IntentStore();
   const intentRateLimiter = deps.intentRateLimiter ?? new RateLimiter();
+  const revokeIntentRateLimiter = deps.revokeIntentRateLimiter ?? new RateLimiter(REVOKE_INTENT_RATE_LIMIT_WINDOW_MS);
   const policy = new PolicyEngine(store);
 
   // Record a handler's terminal outcome: the labelled call counter plus the current
@@ -367,11 +378,13 @@ function buildServer(deps: ServerDeps): McpServer {
 
   // Revoke one of your OWN active intents (v0.6+ intent lifecycle). Within the already-ratified
   // INTENT surface (write/read-your-own) — revoking is affecting your own state, never another
-  // buyer's. Order: replay → token auth → policy → buyer-scoped revoke → emit INTENT_REVOKED.
+  // buyer's. Order: replay → token auth → policy → rate-limit → buyer-scoped revoke → INTENT_REVOKED.
   // A revoke that matches nothing (unknown id, another buyer's intent, already terminal, or
   // lapsed) returns the same generic INVALID_REQUEST — the buyer cannot probe others' intents.
-  // NOTE: no rateLimiter passed → revoke_intent keeps its current (unthrottled) behavior.
-  // Adding a limiter here is tracked separately (C-13 residue), out of scope for this refactor.
+  // Anti-abuse (C-13): a revokeIntentRateLimiter IS passed so the rate-limit stage covers EVERY
+  // authenticated surface — no tool bypasses it. It uses a deliberately shorter window than create
+  // (2s vs 30s) so a buyer can still withdraw several of their own intents in succession; it is
+  // defense-in-depth, explicitly NOT the ratified per-request quota (RATE_LIMIT_WINDOW_MS).
   guardedTool<{ intent_id: string; token?: string; client_request_id?: string }>(
     "revoke_intent",
     "Revoke one of your own active intents by id. Idempotent per client_request_id.",
@@ -380,7 +393,7 @@ function buildServer(deps: ServerDeps): McpServer {
       token: z.string().optional().describe("Buyer bearer JWT (RS256, aud=seller-mcp-node). Identity is derived from token.sub."),
       client_request_id: z.string().optional().describe("Client-supplied idempotency key for replay detection"),
     },
-    { surface: AllowedSurface.INTENT, metricTool: MetricTool.REVOKE_INTENT },
+    { surface: AllowedSurface.INTENT, metricTool: MetricTool.REVOKE_INTENT, rateLimiter: revokeIntentRateLimiter },
     ({ intent_id }, { buyer_id, request_id }) => {
       // Buyer-scoped: undefined when the intent is absent, another buyer's, terminal, or lapsed.
       const revoked = intentStore.revoke(intent_id, buyer_id);
@@ -487,6 +500,9 @@ async function main() {
   // Shared create_intent rate limiter (N=1/T=30s) — one instance so the throttle holds
   // across connections, same reason as the discover/forecast limiters above.
   const intentRateLimiter = new RateLimiter();
+  // Shared revoke_intent rate limiter (C-13) — one instance for the same cross-connection
+  // reason; shorter window than create so withdrawing several of your own intents isn't trapped.
+  const revokeIntentRateLimiter = new RateLimiter(REVOKE_INTENT_RATE_LIMIT_WINDOW_MS);
   // Shared metrics registry — the same instance backs both the tool handlers and the
   // /metrics HTTP route, so counters recorded in-handler are visible at scrape time.
   const metricsRegistry = new MetricsRegistry();
@@ -531,7 +547,7 @@ async function main() {
   sweepExpiredIntents(intentStore, ledger);
   setInterval(() => sweepExpiredIntents(intentStore, ledger), INTENT_SWEEP_INTERVAL_MS).unref();
 
-  const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, intentStore, intentRateLimiter, metricsRegistry };
+  const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, intentStore, intentRateLimiter, revokeIntentRateLimiter, metricsRegistry };
 
   // Fase A: --http serves StreamableHTTP on 127.0.0.1 (external bind = infra act, #8/#10).
   // Default remains stdio for MCP-host usage.

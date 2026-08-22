@@ -12,7 +12,8 @@ import { TEST_DEPLOYMENT_CONFIG } from "../src/config/deployment.js";
 import { CatalogStore, TEST_CATALOG_CONFIG } from "../src/catalog/store.js";
 import { PricingStore, TEST_PRICING_CONFIG } from "../src/pricing/store.js";
 import { ForecastEngine } from "../src/forecast/engine.js";
-import { EntitlementStore, TEST_ENTITLEMENTS_DEMO_CONFIG } from "../src/policy/entitlements.js";
+import { EntitlementStore, TEST_ENTITLEMENTS_DEMO_CONFIG, type EntitlementsConfig } from "../src/policy/entitlements.js";
+import { AllowedSurface } from "../src/policy/types.js";
 import { RateLimiter } from "../src/rate-limiter/limiter.js";
 import { AuditLedger, createMemoryLedger } from "../src/audit/ledger.js";
 import { EventClass } from "../src/audit/event.js";
@@ -54,7 +55,7 @@ async function callAuthed(
   return ctx.client.callTool({ name, arguments: { token: await mintToken(ctx.issuer, buyer_id), ...extra } });
 }
 
-async function setupServer(): Promise<TestContext> {
+async function setupServer(entitlements: EntitlementsConfig = TEST_ENTITLEMENTS_DEMO_CONFIG): Promise<TestContext> {
   const keyPair: KeyPairBundle = await generateDevKeyPair();
   const denylist = createMemoryDenylist();
   const issuer = new TokenIssuer(keyPair.privateKey);
@@ -63,7 +64,7 @@ async function setupServer(): Promise<TestContext> {
   const ledger = createMemoryLedger();
 
   const server = buildServer({
-    store: new EntitlementStore(TEST_ENTITLEMENTS_DEMO_CONFIG),
+    store: new EntitlementStore(entitlements),
     issuer,
     validator,
     wellKnown,
@@ -284,6 +285,56 @@ describe("server integration — policy gate on every authenticated surface (#67
       expect(result.isError, `${tool.name} must fail closed for an unentitled buyer`).toBe(true);
       const envelope = JSON.parse(firstText(result));
       expect(envelope.code, `${tool.name} must deny via policy (AUTH_FAILED)`).toBe("AUTH_FAILED");
+    }
+  });
+});
+
+// Symmetric to the scope-gate invariant above (#67), for the rate-limit stage (C-13): a rapid
+// second call from the SAME entitled buyer must be RATE_LIMITED on EVERY authenticated tool —
+// including revoke_intent, which previously had no throttle. Each surface has its own limiter,
+// so one entitled buyer exercises them all. A new authenticated server.tool(...) wired without a
+// rate-limit check breaks this sweep, forcing its author to add one — the invariant the code
+// enforces by convention, held by a test so drift cannot reintroduce the gap.
+describe("server integration — rate limit on every authenticated surface (C-13)", () => {
+  const FAMILY = "display-ros";
+  const PERIOD = "Q4-2026";
+  const FIRM_PRICE = 4.5;
+
+  // One buyer entitled to every authenticated surface, so the first call of each tool reaches
+  // and consumes the rate stage (auth + scope must pass first).
+  const ALL_SURFACES_CONFIG: EntitlementsConfig = {
+    entitlements: [
+      {
+        buyer_id: ENTITLED_BUYER,
+        surfaces: [
+          AllowedSurface.DISCOVERY,
+          AllowedSurface.WELL_KNOWN,
+          AllowedSurface.PRODUCT_DISCOVERY,
+          AllowedSurface.FORECAST,
+          AllowedSurface.INTENT,
+        ],
+        scopes: ["gam.readonly"],
+        phase: "phase-1-readonly",
+      },
+    ],
+  };
+
+  const THROTTLED_TOOLS: Array<{ name: string; extra: Record<string, unknown> }> = [
+    { name: "discover_products", extra: {} },
+    { name: "get_forecast", extra: { family_id: FAMILY, period: PERIOD } },
+    { name: "create_intent", extra: { family_id: FAMILY, period: PERIOD, price_ref: FIRM_PRICE } },
+    { name: "revoke_intent", extra: { intent_id: "any-id" } },
+  ];
+
+  it("throttles a rapid second call from the same buyer on EVERY authenticated tool", async () => {
+    const ctx = await setupServer(ALL_SURFACES_CONFIG);
+    for (const tool of THROTTLED_TOOLS) {
+      // First call passes the rate stage (downstream may succeed or be INVALID_REQUEST).
+      await callAuthed(ctx, tool.name, ENTITLED_BUYER, tool.extra);
+      const second = await callAuthed(ctx, tool.name, ENTITLED_BUYER, tool.extra);
+      expect(JSON.parse(firstText(second)).code, `${tool.name} must throttle the second rapid call`).toBe(
+        "RATE_LIMITED"
+      );
     }
   });
 });
