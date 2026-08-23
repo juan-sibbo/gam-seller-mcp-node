@@ -21,7 +21,7 @@ import { IntentStore, DEFAULT_INTENT_TTL_MS, DEV_INTENT_PATH } from "./intent/st
 import { RateLimiter } from "./rate-limiter/limiter.js";
 import { ForecastEngine } from "./forecast/engine.js";
 import { loadDeploymentConfigFromFile } from "./config/deployment.js";
-import { isDemoMode, demoFallbackFiles } from "./config/resolve.js";
+import { isDemoMode, demoFallbackFiles, assertOperatorConfigWhenRequired } from "./config/resolve.js";
 import { AuditLedger, DEV_LEDGER_PATH } from "./audit/ledger.js";
 import { ReplayGuard } from "./audit/replay.js";
 import { PseudonymService, DEV_PSEUDONYM_KEYS_PATH } from "./audit/pseudonym.js";
@@ -467,6 +467,10 @@ async function main() {
   const catalog = loadCatalogFromFile();
   // Fail-closed: loadPricingFromFile throws on missing/unparseable valid_until (D7).
   const pricingStore = loadPricingFromFile();
+  // Atomic deploy boundary (C-02): if the operator declared a real deployment
+  // (MCP_REQUIRE_OPERATOR_CONFIG), a fall back to the demo example is a fatal boot error — a real
+  // node must never serve example config unknowingly. No-op when the flag is unset (dev/demo).
+  assertOperatorConfigWhenRequired();
   // Demo mode: no operator config was found, so the node booted on the bundled
   // pilot-publisher example. Surface this loudly — a real deployment must never run
   // on demo data unknowingly. Point MCP_CONFIG_DIR at real config/ files to exit it.

@@ -361,6 +361,27 @@ surface, and durable ledger rotation state. Contract stays `0.2.0`.
   that restores the rotation cursor; legacy bare-array ledgers are migrated transparently on load.
   Pinned by a rotate → persist → reload → `replayVerify` test.
 
+## [0.8.11] — 2026-08-23
+
+Patch release. Two guardrails against misconfiguration and documentation drift. Contract stays `0.2.0`.
+
+### Added
+
+- **`MCP_REQUIRE_OPERATOR_CONFIG` — atomic deploy boundary (C-02).** With no operator config the
+  node falls back to the bundled pilot-publisher example ("demo mode") — right for `npx`/dev, but a
+  real deployment must never serve example entitlements (real access to demo families) unknowingly.
+  When this flag is set, **any** fall back to the demo example is a **fatal boot error** naming the
+  offending files — refusing to start beats serving demo config in production. Off by default, so
+  the one-paste demo is unaffected. Fixes the runtime half of the "atomic deploy boundary" the demo
+  mode already announced but did not enforce.
+- **README ↔ code parity check in CI (C-27).** A test (`tests/readme-claims.test.ts`, part of the
+  existing CI run) pins the specific drift classes this project actually hit, so a refutable README
+  claim fails the build instead of a reader noticing weeks later: every repo path referenced in the
+  README must exist; the documented MCP tool set must equal what `server.ts` registers (both
+  directions); the anchor WORM backends the README claims (`tsa`/`s3` via `MCP_ANCHOR_SINK`) must be
+  backed by real code; and the README must not claim a live GAM connection while the adapter is a
+  stub. Guards the credential in **both** directions — over- and under-claiming.
+
 ## [0.8.10] — 2026-08-23
 
 Patch release. Adds the second external WORM backend for the anchor — S3 Object Lock — so a
@@ -473,6 +494,7 @@ persistence path. Contract stays `0.2.0`.
   non-atomically. Pinned by a test that blocks the temp path and asserts the committed file
   survives.
 
+[0.8.11]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.11
 [0.8.10]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.10
 [0.8.9]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.9
 [0.8.8]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.8
