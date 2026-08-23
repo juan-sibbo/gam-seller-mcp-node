@@ -361,6 +361,33 @@ surface, and durable ledger rotation state. Contract stays `0.2.0`.
   that restores the rotation cursor; legacy bare-array ledgers are migrated transparently on load.
   Pinned by a rotate → persist → reload → `replayVerify` test.
 
+## [0.8.10] — 2026-08-23
+
+Patch release. Adds the second external WORM backend for the anchor — S3 Object Lock — so a
+deployment now has two write-once options, chosen by config. Contract stays `0.2.0`.
+
+### Added
+
+- **`MCP_ANCHOR_SINK=s3` — S3 Object Lock timestamping backend (C-08, issue #85).** Each anchored
+  head-hash is written as its own object to an S3 bucket with **Object Lock in COMPLIANCE mode**
+  plus a retain-until date. In that mode an object cannot be overwritten or deleted until the
+  retention expires — **not even by the account root** — so the operator cannot rewrite anchor
+  history. AWS enforces the immutability, not the node.
+  - The AWS SDK is an **optional dependency** (`peerDependenciesMeta`), imported dynamically only
+    when the `s3` backend is selected, so the core install stays at three dependencies. A
+    deployment that uses this backend installs `@aws-sdk/client-s3` itself; selecting `s3` without
+    it fails closed with a clear message.
+  - Config: `MCP_S3_BUCKET` (required, fail-closed), `MCP_S3_REGION`/`AWS_REGION`, `MCP_S3_PREFIX`
+    (default `anchors/`), `MCP_S3_RETENTION_DAYS` (default ~10 years), `MCP_S3_OBJECT_LOCK_MODE`
+    (default `COMPLIANCE`). Same local-first, externalize-async flow as the TSA backend: durable
+    local mirror on `append`, S3 PUTs on `reconcile`, a local manifest so a restart never re-PUTs
+    an already-locked object nor drops a pending one.
+
+  With this, the two chosen WORM backends — **`tsa`** (RFC 3161) and **`s3`** (Object Lock) — both
+  live in `main` and are selected at deploy time by `MCP_ANCHOR_SINK`; there is no code change to
+  switch. Closing the operator threat (T-1) still requires pointing at a live write-once
+  destination (a TSA URL, or a locked bucket) — an infrastructure act.
+
 ## [0.8.9] — 2026-08-23
 
 Patch release. Adds the first real external WORM backend for the anchor — RFC 3161 timestamping.
@@ -446,6 +473,7 @@ persistence path. Contract stays `0.2.0`.
   non-atomically. Pinned by a test that blocks the temp path and asserts the committed file
   survives.
 
+[0.8.10]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.10
 [0.8.9]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.9
 [0.8.8]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.8
 [0.8.7]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.7
