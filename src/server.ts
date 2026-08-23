@@ -25,7 +25,8 @@ import { isDemoMode, demoFallbackFiles } from "./config/resolve.js";
 import { AuditLedger, DEV_LEDGER_PATH } from "./audit/ledger.js";
 import { ReplayGuard } from "./audit/replay.js";
 import { PseudonymService, DEV_PSEUDONYM_KEYS_PATH } from "./audit/pseudonym.js";
-import { HeadHashAnchor, verifyAfterRestore, DEV_ANCHOR_PATH, ANCHOR_INTERVAL_MS } from "./audit/anchor.js";
+import { HeadHashAnchor, verifyAfterRestore, ANCHOR_INTERVAL_MS } from "./audit/anchor.js";
+import { resolveAnchorSink } from "./audit/anchor-sink.js";
 import { RetentionService, DEV_ARCHIVE_PATH, runRetentionCycle, RETENTION_INTERVAL_MS } from "./audit/retention.js";
 import { EventClass } from "./audit/event.js";
 import { startHttpServer, httpOptionsFromEnv } from "./http.js";
@@ -510,7 +511,9 @@ async function main() {
   // Audit chain: pseudonymized ledger + external head-hash anchoring (S3, wired S7).
   const pseudonyms = new PseudonymService(DEV_PSEUDONYM_KEYS_PATH);
   const ledger = new AuditLedger(DEV_LEDGER_PATH, pseudonyms);
-  const anchor = new HeadHashAnchor(DEV_ANCHOR_PATH);
+  // Anchor destination is operator-selectable (MCP_ANCHOR_SINK) — default is the append-only
+  // local file; a deployment can point it at a real WORM store without a code change (C-08).
+  const anchor = new HeadHashAnchor(await resolveAnchorSink());
 
   // B3 (Carril B 2026-08-07): verify chain integrity before serving any requests.
   // Fail-closed: a head-hash mismatch or replay failure means the on-disk ledger is
