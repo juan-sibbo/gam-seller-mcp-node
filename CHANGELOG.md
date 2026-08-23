@@ -361,6 +361,26 @@ surface, and durable ledger rotation state. Contract stays `0.2.0`.
   that restores the rotation cursor; legacy bare-array ledgers are migrated transparently on load.
   Pinned by a rotate → persist → reload → `replayVerify` test.
 
+## [0.8.8] — 2026-08-23
+
+Patch release. Makes the anchor destination operator-selectable — the config half of the WORM
+seam started in 0.8.7. Contract stays `0.2.0`.
+
+### Added
+
+- **`MCP_ANCHOR_SINK` — operator-selectable anchor destination (C-08, issue #85).** The external
+  tamper-evidence store is now chosen at deploy time by configuration, not baked into the code:
+  - unset or `file` → the bundled append-only local JSONL sink (the dev/simulation default);
+  - a **module specifier** (a path or a package) → a custom `AnchorSink` is dynamically imported
+    (the module exports an `AnchorSink`, or a factory `(env) => AnchorSink`, as `default` or
+    `createAnchorSink`). This is the **bring-your-own-WORM-backend** seam that the built-in `tsa`
+    (RFC 3161 timestamping) and `s3` (S3 Object Lock) backends plug into in the next releases.
+
+  Misconfiguration **fails closed**: an anchor sink that cannot be loaded or is invalid stops the
+  boot rather than silently falling back to the local file (which would quietly weaken the very
+  tamper-evidence the operator asked for). Resolution is async so a backend can lazy-load an
+  optional dependency without bloating the core package.
+
 ## [0.8.7] — 2026-08-23
 
 Patch release. Makes the external head-hash anchor genuinely append-only and injectable, so a
@@ -401,6 +421,7 @@ persistence path. Contract stays `0.2.0`.
   non-atomically. Pinned by a test that blocks the temp path and asserts the committed file
   survives.
 
+[0.8.8]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.8
 [0.8.7]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.7
 [0.8.6]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.6
 [0.8.5]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.5
