@@ -1,6 +1,6 @@
 {
   "name": "gam-seller-mcp-node",
-  "version": "0.8.9",
+  "version": "0.8.10",
   "mcpName": "io.github.juan-sibbo/gam-seller-mcp-node",
   "type": "module",
   "license": "MIT",
@@ -69,6 +69,14 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "jose": "^6.2.4",
     "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "@aws-sdk/client-s3": "^3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@aws-sdk/client-s3": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

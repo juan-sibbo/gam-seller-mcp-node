@@ -37,6 +37,13 @@ export async function resolveAnchorSink(
     return createTsaAnchorSinkFromEnv(env);
   }
 
+  // Named built-in backend: "s3" — S3 Object Lock (needs the optional @aws-sdk/client-s3 dep,
+  // imported lazily inside the factory so the core install stays lean).
+  if (raw.toLowerCase() === "s3") {
+    const { createS3AnchorSinkFromEnv } = await import("./anchor-s3.js");
+    return createS3AnchorSinkFromEnv(env);
+  }
+
   // Bring-your-own sink: import the module the operator pointed us at. A path is turned into a
   // file URL so an absolute/relative path works the same as a bare package specifier.
   const specifier = raw.startsWith(".") || isAbsolute(raw) ? pathToFileURL(resolve(raw)).href : raw;
