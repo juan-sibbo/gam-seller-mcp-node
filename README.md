@@ -76,13 +76,13 @@ Every call flows through the same pipeline before any domain logic runs:
   Response to buyer
 ```
 
-Each request-path gate rejects on failure. Two honest caveats to the diagram above:
+Each request-path gate rejects on failure. One honest caveat to the diagram above:
 
-- **Rate limit** currently covers the read surfaces and `create_intent`; extending it to
-  `revoke_intent`, so *every* authenticated tool is throttled, is in review (see the
-  limitations table under [Current status](#current-status)).
 - **`client_request_id`** (the replay-guard deduplication key) is optional; a request that omits
   it bypasses SEC-GATE-3.
+
+The rate-limit stage covers **every** authenticated tool — the read surfaces, `create_intent`,
+and `revoke_intent` — so no authenticated surface bypasses it.
 
 A corrupted or tampered on-disk ledger is **detected on startup** and the node refuses to serve
 (fail-closed on load, plus a chain-integrity verify before the first request) rather than
@@ -187,6 +187,10 @@ Working prototype. The full request pipeline (auth → policy → rate-limit →
 the buyer-scoped commitment primitive (`create_intent` / `revoke_intent`, with TTL expiry),
 the audit ledger, GDPR data-subject-rights toolkit, Docker packaging, HTTP transport,
 and a live interop probe (Python buyer agent simulation) are all implemented and tested.
+The persistence layer is hardened for restarts (append-only, atomic writes, durable rotation
+state, fail-closed load), and the head-hash anchor is append-only with selectable external WORM
+backends (RFC 3161 timestamping / S3 Object Lock) — see [Known limitations](#current-status)
+for the residual (a live write-once destination is an operator infra act).
 
 **Not yet wired**: a live Google Ad Manager connection. The catalog and forecast data are
 synthetic, loaded from local config. The GAM ForecastService SOAP adapter interface exists
@@ -200,11 +204,12 @@ changes state over time is both a proof of honesty and a proof of progress.
 | Limitation | Anchor | Status | Closed by |
 |---|---|---|---|
 | Attribution (`buyer_id` / `request_id`) is stored per entry but sits **outside** the chain's tamper-evidence hash | `audit/event.ts` | Design decision, not a defect — traceability vs. erasability ([ADR-4](docs/adr/ADR-4.md)) | — |
-| Head-hash anchor is a local, rewritable `writeFileSync` — no cloud WORM / Object Lock | `audit/anchor.ts` | **Open** — needs a real deployment target | deployment boundary |
+| Head-hash anchor rewrote its whole file each write (`writeFileSync`) — not append-only, no external WORM | `audit/anchor.ts` | ✅ **Closed** 2026-08-23 — append-only JSONL + injectable `AnchorSink`; selectable `tsa` (RFC 3161) and `s3` (S3 Object Lock) backends via `MCP_ANCHOR_SINK` | [#92](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/92) [#94](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/94) [#95](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/95) |
+| External WORM anchoring needs the operator to point at a live write-once destination (a TSA URL, or a locked bucket) — the node ships the backends, not the destination | `audit/anchor-tsa.ts`, `audit/anchor-s3.ts` | **Open** — deployment boundary (infra act) | — |
 | `client_request_id` (replay guard) is optional; omitting it bypasses SEC-GATE-3 | `src/server.ts` | **Open** | — |
 | No TLS in transit (a reverse proxy is expected to terminate) | — | **Open** — deployment boundary | — |
-| `revoke_intent` is not covered by the rate-limit stage | `src/server.ts` | **In review** | [#80](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/80) |
-| GDPR DSR CLI (`scripts/dsr.ts`, …) not shipped in the npm package | `package.json` `files` | **In review** | [#78](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/78) |
+| `revoke_intent` is not covered by the rate-limit stage | `src/server.ts` | ✅ **Closed** 2026-08-18 — now behind the rate-limit gate like every authenticated surface | [#80](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/80) |
+| GDPR DSR CLI (`scripts/dsr.ts`, …) not shipped in the npm package | `package.json` `files` | ✅ **Closed** 2026-08 — ships as the `gam-seller-dsr` bin | [#78](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/78) |
 | Ledger loaded fail-open — a corrupt file reset to an empty chain | `audit/ledger.ts` | ✅ **Closed** 2026-08-07 | [#65](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/65) |
 | Chain integrity not verified before serving on startup | `src/server.ts` | ✅ **Closed** 2026-08-07 | [#65](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/65) |
 
@@ -219,10 +224,10 @@ Key modules:
 | `src/server.ts` | MCP tool definitions + request pipeline |
 | `src/policy/` | Default-Deny engine, entitlement store, surface allowlist/denylist |
 | `src/identity/` | RS256 key management, token issuance/validation, revocation denylist |
-| `src/audit/` | Hash-chained ledger, HMAC pseudonymization, local-file head-hash anchoring |
+| `src/audit/` | Hash-chained ledger, HMAC pseudonymization, append-only head-hash anchoring with selectable WORM backends (`anchor-tsa.ts`, `anchor-s3.ts`) |
 | `src/pricing/` | Firm list price store, expiry-aware (fail-closed on stale prices) |
 | `src/forecast/` | Bucket engine + GAM adapter seam (synthetic today) |
-| `src/dsr/` | GDPR Art. 15/17/18/20 data-subject-rights toolkit (source only) |
+| `src/dsr/` | GDPR Art. 15/17/18/20 data-subject-rights toolkit (also shipped as the `gam-seller-dsr` bin) |
 | `src/catalog/` | Product family store, per-buyer access grants |
 
 ## Security model
@@ -326,10 +331,10 @@ Raw `buyer_id` values never enter the audit ledger — only an HMAC pseudonym. T
 buyer's audit data (GDPR Art. 15/17/18/20). The node stores nothing about end users; the DSR
 scope is exactly what it records — B2B buyer organization pseudonyms and their request events.
 
-**Distribution note.** The DSR CLI scripts (`scripts/dsr.ts`, `scripts/issue-buyer-token.ts`,
-`scripts/revoke-token.ts`) are present in the source repository but are not included in the
-npm package distribution. Publishers deploying via `npx` or Docker must clone the repository
-to access the DSR CLI.
+**Distribution note.** The DSR toolkit ships in the npm package as the `gam-seller-dsr` bin, so
+export / restriction / erasure can be run without a checkout. The token-management scripts
+(`scripts/issue-buyer-token.ts`, `scripts/revoke-token.ts`) remain source-only — publishers who
+need them must clone the repository.
 
 ## Roadmap
 
@@ -339,7 +344,9 @@ roadmap. Highlights:
 - **Real GAM adapter** — wire `getAvailabilityForecast` via the ForecastService SOAP API
 - **Buyer agent SDKs** — Python and TypeScript client libraries for the MCP buyer flow
 - **OpenRTB 3.0 taxonomy** — align `family_id` scheme with IAB standards
-- **Prometheus metrics** — observability endpoint for production deployments
+- **Well-known observability properties** — expose `data_source` / `anchor_store` / `deployment_mode` so a buyer agent can distinguish demo from production programmatically
+
+(The Prometheus `/metrics` endpoint is already shipped — loopback-only, opt-in.)
 
 ## Contributing
 
