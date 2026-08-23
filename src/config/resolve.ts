@@ -49,3 +49,29 @@ export function isDemoMode(): boolean {
 export function demoFallbackFiles(): readonly string[] {
   return [...demoFallbacks];
 }
+
+// Env flag by which an operator declares "this is a real deployment": when set, the node must
+// NOT boot on the bundled demo example. Truthy = 1 / true / yes.
+export const REQUIRE_OPERATOR_CONFIG_ENV = "MCP_REQUIRE_OPERATOR_CONFIG";
+
+// Fail-closed production guard (PLAN-AGOSTO Fase 0 — "atomic deploy boundary, fails closed").
+// Without config a deployment silently falls back to the demo example, which is right for
+// dev/`npx` but WRONG for a real deployment: it would serve demo entitlements (real access to
+// example families) unknowingly. When MCP_REQUIRE_OPERATOR_CONFIG is set, any demo fallback is a
+// fatal boot error — refusing to start beats serving example config in production. Off by default
+// so the one-paste demo keeps working. Params are injectable for testing.
+export function assertOperatorConfigWhenRequired(
+  env: NodeJS.ProcessEnv = process.env,
+  demo: boolean = isDemoMode(),
+  fallbacks: readonly string[] = demoFallbackFiles()
+): void {
+  const required = ["1", "true", "yes"].includes((env[REQUIRE_OPERATOR_CONFIG_ENV] ?? "").trim().toLowerCase());
+  if (required && demo) {
+    throw new Error(
+      `[config] FATAL: ${REQUIRE_OPERATOR_CONFIG_ENV} is set but the node fell back to the bundled ` +
+        `demo example for: ${fallbacks.join(", ")}. Refusing to start a real deployment on demo ` +
+        `config. Provide real config (e.g. via MCP_CONFIG_DIR) for every file, or unset the flag ` +
+        `for dev/demo use.`
+    );
+  }
+}
