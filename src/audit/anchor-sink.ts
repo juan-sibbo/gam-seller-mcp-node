@@ -31,6 +31,12 @@ export async function resolveAnchorSink(
     return DEV_ANCHOR_PATH;
   }
 
+  // Named built-in backend: "tsa" — RFC 3161 timestamping (no external npm dependency).
+  if (raw.toLowerCase() === "tsa") {
+    const { createTsaAnchorSinkFromEnv } = await import("./anchor-tsa.js");
+    return createTsaAnchorSinkFromEnv(env);
+  }
+
   // Bring-your-own sink: import the module the operator pointed us at. A path is turned into a
   // file URL so an absolute/relative path works the same as a bare package specifier.
   const specifier = raw.startsWith(".") || isAbsolute(raw) ? pathToFileURL(resolve(raw)).href : raw;

@@ -361,6 +361,31 @@ surface, and durable ledger rotation state. Contract stays `0.2.0`.
   that restores the rotation cursor; legacy bare-array ledgers are migrated transparently on load.
   Pinned by a rotate → persist → reload → `replayVerify` test.
 
+## [0.8.9] — 2026-08-23
+
+Patch release. Adds the first real external WORM backend for the anchor — RFC 3161 timestamping.
+Contract stays `0.2.0`.
+
+### Added
+
+- **`MCP_ANCHOR_SINK=tsa` — RFC 3161 timestamping backend (C-08, issue #85).** Each anchored
+  head-hash is submitted to a Time-Stamp Authority (`MCP_TSA_URL`), which returns a signed
+  timestamp token attesting the hash existed at that time. Unlike a local file, that token is
+  **third-party tamper-evidence**: it is signed by the TSA's key, so the operator cannot forge it.
+  No new npm dependency — the RFC 3161 `TimeStampReq` is a small fixed ASN.1 DER structure built
+  by hand and POSTed with the built-in `fetch`; the opaque token bytes are stored for later
+  offline verification (e.g. `openssl ts -verify`).
+- **Local-first, externalize-async anchor flow.** `AnchorSink` gains an optional `reconcile()`;
+  a network-backed sink writes each record to an append-only **local mirror synchronously** (so
+  durability and `readAll` never block on the network) and pushes pending records to the external
+  store on boot and on the periodic anchor cycle. A TSA outage or a crash mid-submit re-queues the
+  record — the obligation to timestamp it survives a restart — and a failure surfaces at `/health`
+  via the durability signal. The local `file` sink is unaffected (no `reconcile`).
+
+  Note: TSA (like S3 Object Lock, next) is now a genuine external write-once destination, so this
+  is the first backend that actually advances C-08 against the operator threat (T-1), not just the
+  local-file precondition.
+
 ## [0.8.8] — 2026-08-23
 
 Patch release. Makes the anchor destination operator-selectable — the config half of the WORM
@@ -421,6 +446,7 @@ persistence path. Contract stays `0.2.0`.
   non-atomically. Pinned by a test that blocks the temp path and asserts the committed file
   survives.
 
+[0.8.9]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.9
 [0.8.8]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.8
 [0.8.7]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.7
 [0.8.6]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.6

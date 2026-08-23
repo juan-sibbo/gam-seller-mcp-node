@@ -31,9 +31,16 @@ export interface AnchorRecord {
 // writes a local JSONL file; a production deployment injects a sink that writes to a cloud WORM
 // store — that external immutability is what makes the anchor tamper-evident against the operator.
 export interface AnchorSink {
+  // Record an anchor synchronously and durably. MUST be append-only and MUST NOT block on the
+  // network — a network-backed sink writes a local durability line here and defers the external
+  // submission to reconcile() (local-first, externalize-async).
   append(record: AnchorRecord): void;
   readAll(): AnchorRecord[];
   isHealthy(): boolean;
+  // Optional: push any not-yet-externalized records to the external store (e.g. POST to a TSA,
+  // PUT to S3 Object Lock). Called on boot and on the periodic anchor cycle. Idempotent; a
+  // failure re-queues the record for the next cycle. Sinks with no external store omit it.
+  reconcile?(): Promise<void>;
 }
 
 // Default sink: an append-only local JSONL file. Each anchor() writes exactly one line via
@@ -166,6 +173,12 @@ export class HeadHashAnchor {
   // (no sink) are always healthy. Aggregated at /health (issue #51).
   isPersistenceHealthy(): boolean {
     return this.sink ? this.sink.isHealthy() : true;
+  }
+
+  // Externalize any pending records to the sink's write-once store (no-op for the local file
+  // sink and in-memory anchors). Called on boot and on the periodic anchor cycle.
+  async reconcile(): Promise<void> {
+    await this.sink?.reconcile?.();
   }
 }
 
