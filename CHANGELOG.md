@@ -361,6 +361,30 @@ surface, and durable ledger rotation state. Contract stays `0.2.0`.
   that restores the rotation cursor; legacy bare-array ledgers are migrated transparently on load.
   Pinned by a rotate → persist → reload → `replayVerify` test.
 
+## [0.8.7] — 2026-08-23
+
+Patch release. Makes the external head-hash anchor genuinely append-only and injectable, so a
+production deployment can point it at a write-once (WORM) destination without a code change.
+Contract stays `0.2.0`.
+
+### Hardened
+
+- **Append-only anchor + WORM sink seam (C-08, issue #85).** The head-hash anchor is the ledger's
+  external tamper-evidence: it only holds against an operator who rewrites the ledger (T-1) if the
+  anchor itself cannot be rewritten. The previous `save()` re-serialized the *entire* anchor file
+  on every write — a whole-file overwrite that contradicted the module's own "append-only" claim
+  and gave a code path that rewrites anchor history. The anchor now:
+  - writes **one JSONL line per record** via `appendFileSync` — the file is only ever extended,
+    never re-serialized (a legacy JSON-array file is migrated to JSONL once, transparently, at the
+    same path; a torn trailing line from an interrupted append is tolerated on read);
+  - persists through an injectable **`AnchorSink`**, so a deployment can supply a sink that writes
+    to a cloud write-once store (S3 Object Lock, GCS Bucket Lock, a timestamping/notary service)
+    as operator configuration rather than a code change.
+
+  Scope note: a local append-only file removes the programmatic rewrite path and is the WORM-ready
+  precondition, but is **not itself** tamper-proof against someone with disk access — closing T-1
+  requires wiring a real write-once destination through the sink (an infrastructure act).
+
 ## [0.8.6] — 2026-08-22
 
 Patch release. Makes the intent store's on-disk write atomic, closing the last non-atomic
@@ -377,6 +401,7 @@ persistence path. Contract stays `0.2.0`.
   non-atomically. Pinned by a test that blocks the temp path and asserts the committed file
   survives.
 
+[0.8.7]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.7
 [0.8.6]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.6
 [0.8.5]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.5
 [0.8.4]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.4

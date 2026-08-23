@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, appendFileSync, renameSync, mkdirSync } from "fs";
 import { dirname } from "path";
 import { dataPath } from "../config/paths.js";
 import { DurabilityHealth } from "../durability.js";
@@ -6,13 +6,19 @@ import { DurabilityHealth } from "../durability.js";
 // External head-hash anchoring — decision-package Bloque 2 §2.1 + §2.2.
 // Ratified: cloud-immutable (Object Lock) destination; 60-min batch; head-hash-first verify.
 //
-// In dev: head hashes are written to a local file in append-only mode.
-// This simulates Object Lock immutability: the file is only appended (never overwritten).
-// Production: replace with cloud-immutable write (S3 Object Lock, GCS Bucket Lock, etc.)
-//
-// T-LOG-03: hash-chain alone is NOT tamper-evident without external anchoring.
-// An adversary with write access to the ledger can recompute an internally-consistent chain.
-// The externally anchored head hash provides the tamper-evident guarantee.
+// T-LOG-03: hash-chain alone is NOT tamper-evident without external anchoring. An adversary
+// with write access to the ledger can recompute an internally-consistent chain; the externally
+// anchored head hash is what exposes that. For the anchor to hold against the OPERATOR (T-1,
+// issue #85) — not merely a third party — two properties matter:
+//   1. It is APPEND-ONLY: a record, once written, is never rewritten or deleted. The default
+//      sink writes one JSONL line per record (never re-serializing the file), so the code has
+//      no path that rewrites anchor history — unlike the previous whole-file overwrite, which
+//      contradicted this module's own "append-only" claim.
+//   2. In production it lives in a WRITE-ONCE destination the operator cannot rewrite (S3 Object
+//      Lock, GCS Bucket Lock, a notary/timestamping service). That destination is what actually
+//      closes T-1; a local append-only file is the dev simulation and the WORM-ready precondition,
+//      NOT itself tamper-proof against someone with disk access. The AnchorSink seam below makes
+//      wiring a real WORM store an operator config act, not a code change.
 
 export interface AnchorRecord {
   seq: number;           // highest ledger seq anchored
@@ -20,19 +26,118 @@ export interface AnchorRecord {
   timestamp: string;     // ISO 8601
 }
 
-export class HeadHashAnchor {
-  private records: AnchorRecord[] = [];
-  private readonly persistPath: string | null;
+// The persistence destination for anchor records. Implementations MUST be append-only: append()
+// may never rewrite or delete a previously-appended record. The default (AppendOnlyFileAnchorSink)
+// writes a local JSONL file; a production deployment injects a sink that writes to a cloud WORM
+// store — that external immutability is what makes the anchor tamper-evident against the operator.
+export interface AnchorSink {
+  append(record: AnchorRecord): void;
+  readAll(): AnchorRecord[];
+  isHealthy(): boolean;
+}
+
+// Default sink: an append-only local JSONL file. Each anchor() writes exactly one line via
+// appendFileSync — the file is only ever extended, never re-serialized. A legacy JSON-array file
+// (the previous format) is migrated to JSONL once on first read. A torn trailing line (an append
+// interrupted by a crash) is tolerated: readAll returns the longest valid prefix.
+export class AppendOnlyFileAnchorSink implements AnchorSink {
   private readonly durability = new DurabilityHealth("anchor", "anchor");
 
-  constructor(persistPath: string | null = null) {
-    this.persistPath = persistPath;
-    if (persistPath) {
-      this.load();
+  constructor(private readonly persistPath: string) {}
+
+  append(record: AnchorRecord): void {
+    try {
+      mkdirSync(dirname(this.persistPath), { recursive: true });
+      appendFileSync(this.persistPath, JSON.stringify(record) + "\n", "utf-8");
+      this.durability.markHealthy();
+    } catch (err) {
+      // Do NOT swallow: a lost anchor write means the external tamper-evidence for the ledger
+      // head is not persisted — surface it (health flag + ERROR), never a WARNING.
+      this.durability.markDegraded(err);
     }
   }
 
-  // Anchor the current head hash. Append-only — never deletes or overwrites.
+  readAll(): AnchorRecord[] {
+    let raw: string;
+    try {
+      raw = readFileSync(this.persistPath, "utf-8");
+    } catch {
+      return []; // ENOENT (first run) or unreadable → empty; verifyAfterRestore fails closed if
+                 // the ledger is non-empty, so a missing/unreadable anchor cannot pass silently.
+    }
+    const trimmed = raw.trim();
+    if (trimmed === "") return [];
+
+    // Legacy v0 format: a single JSON array. Migrate to append-only JSONL once (the records are
+    // preserved identically — a container-format upgrade, not a history rewrite).
+    if (trimmed[0] === "[") {
+      let records: AnchorRecord[];
+      try {
+        records = JSON.parse(trimmed) as AnchorRecord[];
+      } catch {
+        return [];
+      }
+      this.migrateToJsonl(records);
+      return records;
+    }
+
+    // v1 format: JSONL, one record per line. Parse the longest valid prefix — a failed line is a
+    // torn append (only ever the last line, since we only append), so we stop and keep the rest.
+    const records: AnchorRecord[] = [];
+    for (const line of trimmed.split("\n")) {
+      const t = line.trim();
+      if (t === "") continue;
+      try {
+        records.push(JSON.parse(t) as AnchorRecord);
+      } catch {
+        break;
+      }
+    }
+    return records;
+  }
+
+  isHealthy(): boolean {
+    return this.durability.isHealthy();
+  }
+
+  // One-time upgrade of a legacy JSON-array file to JSONL. Best-effort: on failure the records are
+  // still in memory this run and the durability flag surfaces the degradation.
+  private migrateToJsonl(records: AnchorRecord[]): void {
+    try {
+      mkdirSync(dirname(this.persistPath), { recursive: true });
+      // Rewrite is safe here precisely because the on-disk CONTENT is unchanged (same records,
+      // same order) — this is a format migration, not a mutation of anchor history. Write the
+      // JSONL rendering to a temp file and rename it over the legacy array atomically.
+      const tmpPath = `${this.persistPath}.tmp`;
+      writeFileSync(tmpPath, records.map((r) => JSON.stringify(r) + "\n").join(""), "utf-8");
+      renameSync(tmpPath, this.persistPath);
+      this.durability.markHealthy();
+    } catch (err) {
+      this.durability.markDegraded(err);
+    }
+  }
+}
+
+export class HeadHashAnchor {
+  private records: AnchorRecord[] = [];
+  private readonly sink: AnchorSink | null;
+
+  // Accepts a sink (production WORM store or a custom impl), a file path (wrapped in the default
+  // append-only file sink — the back-compatible dev/CLI path), or null (in-memory only).
+  constructor(dest: AnchorSink | string | null = null) {
+    if (dest === null) {
+      this.sink = null;
+    } else if (typeof dest === "string") {
+      this.sink = new AppendOnlyFileAnchorSink(dest);
+    } else {
+      this.sink = dest;
+    }
+    if (this.sink) {
+      this.records = this.sink.readAll();
+    }
+  }
+
+  // Anchor the current head hash. Append-only — the sink never deletes or overwrites.
   anchor(headHash: string, highestSeq: number): AnchorRecord {
     const record: AnchorRecord = {
       seq: highestSeq,
@@ -40,7 +145,7 @@ export class HeadHashAnchor {
       timestamp: new Date().toISOString(),
     };
     this.records.push(record);
-    this.save();
+    this.sink?.append(record);
     return record;
   }
 
@@ -57,35 +162,10 @@ export class HeadHashAnchor {
     return this.records.length;
   }
 
-  private load(): void {
-    if (!this.persistPath) return;
-    try {
-      const raw = readFileSync(this.persistPath, "utf-8");
-      this.records = JSON.parse(raw) as AnchorRecord[];
-    } catch {
-      this.records = [];
-    }
-  }
-
-  // True while every disk write has succeeded; false once a persist has failed (see save()).
-  // In-memory anchors (no persistPath) are always healthy. Aggregated at /health (issue #51).
+  // True while every anchor write has succeeded; false once one has failed. In-memory anchors
+  // (no sink) are always healthy. Aggregated at /health (issue #51).
   isPersistenceHealthy(): boolean {
-    return this.durability.isHealthy();
-  }
-
-  private save(): void {
-    if (!this.persistPath) return;
-    try {
-      mkdirSync(dirname(this.persistPath), { recursive: true });
-      // Append semantics: load existing + push new record + overwrite.
-      // Production: use cloud-immutable write instead (never overwrite).
-      writeFileSync(this.persistPath, JSON.stringify(this.records, null, 2), "utf-8");
-      this.durability.markHealthy();
-    } catch (err) {
-      // Do NOT swallow: a lost anchor write means the external tamper-evidence for the
-      // ledger head is not persisted — surface it (health flag + ERROR), never a WARNING.
-      this.durability.markDegraded(err);
-    }
+    return this.sink ? this.sink.isHealthy() : true;
   }
 }
 
