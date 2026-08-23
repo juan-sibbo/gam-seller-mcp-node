@@ -363,7 +363,7 @@ surface, and durable ledger rotation state. Contract stays `0.2.0`.
 
 ## [0.8.11] — 2026-08-23
 
-Patch release. Adds a fail-closed production guard against booting on demo config. Contract stays `0.2.0`.
+Patch release. Two guardrails against misconfiguration and documentation drift. Contract stays `0.2.0`.
 
 ### Added
 
@@ -374,6 +374,13 @@ Patch release. Adds a fail-closed production guard against booting on demo confi
   offending files — refusing to start beats serving demo config in production. Off by default, so
   the one-paste demo is unaffected. Fixes the runtime half of the "atomic deploy boundary" the demo
   mode already announced but did not enforce.
+- **README ↔ code parity check in CI (C-27).** A test (`tests/readme-claims.test.ts`, part of the
+  existing CI run) pins the specific drift classes this project actually hit, so a refutable README
+  claim fails the build instead of a reader noticing weeks later: every repo path referenced in the
+  README must exist; the documented MCP tool set must equal what `server.ts` registers (both
+  directions); the anchor WORM backends the README claims (`tsa`/`s3` via `MCP_ANCHOR_SINK`) must be
+  backed by real code; and the README must not claim a live GAM connection while the adapter is a
+  stub. Guards the credential in **both** directions — over- and under-claiming.
 
 ## [0.8.10] — 2026-08-23
 
