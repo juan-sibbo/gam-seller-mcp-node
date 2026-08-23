@@ -1,6 +1,6 @@
 {
   "name": "gam-seller-mcp-node",
-  "version": "0.8.6",
+  "version": "0.8.7",
   "mcpName": "io.github.juan-sibbo/gam-seller-mcp-node",
   "type": "module",
   "license": "MIT",
