@@ -529,7 +529,13 @@ async function main() {
   process.stderr.write("[audit] Ledger integrity verified on startup.\n");
 
   anchorHead(ledger, anchor); // anchor whatever survived the previous run
-  setInterval(() => anchorHead(ledger, anchor), ANCHOR_INTERVAL_MS).unref();
+  // Externalize pending anchors to the write-once store (TSA/S3) — no-op for the local file sink.
+  // Fire-and-forget on the cycle: a network hiccup must never block serving; failures re-queue.
+  void anchor.reconcile();
+  setInterval(() => {
+    anchorHead(ledger, anchor);
+    void anchor.reconcile();
+  }, ANCHOR_INTERVAL_MS).unref();
 
   // Enforce ledger retention automatically (A3 SIGNED: 90d hot → 12m archive → purge).
   // Without this scheduled cycle, rotate()/purge() never run and the "automatic" purge
