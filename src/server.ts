@@ -21,7 +21,7 @@ import { IntentStore, DEFAULT_INTENT_TTL_MS, DEV_INTENT_PATH } from "./intent/st
 import { RateLimiter } from "./rate-limiter/limiter.js";
 import { ForecastEngine } from "./forecast/engine.js";
 import { loadDeploymentConfigFromFile } from "./config/deployment.js";
-import { isDemoMode, demoFallbackFiles, assertOperatorConfigWhenRequired } from "./config/resolve.js";
+import { isDemoMode, demoFallbackFiles, assertOperatorConfigWhenRequired, requiresIdempotencyKey } from "./config/resolve.js";
 import { AuditLedger, DEV_LEDGER_PATH } from "./audit/ledger.js";
 import { ReplayGuard } from "./audit/replay.js";
 import { PseudonymService, DEV_PSEUDONYM_KEYS_PATH } from "./audit/pseudonym.js";
@@ -77,6 +77,10 @@ interface ServerDeps {
   // Optional operator metrics. When absent, every handler runs unchanged and no
   // series are recorded — observability is additive, never on the request's critical path.
   metricsRegistry?: MetricsRegistry;
+  // When true, an authenticated request without a client_request_id is rejected (issue #82):
+  // client_request_id drives SEC-GATE-3 replay detection, so omitting it must not bypass the gate.
+  // Absent → read from MCP_REQUIRE_IDEMPOTENCY_KEY (default off, back-compat). Injectable for tests.
+  requireIdempotencyKey?: boolean;
 }
 
 // revoke_intent throttle window (C-13). Deliberately shorter than create's ratified 30s: a
@@ -87,6 +91,9 @@ const REVOKE_INTENT_RATE_LIMIT_WINDOW_MS = 2_000;
 
 function buildServer(deps: ServerDeps): McpServer {
   const { store, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, metricsRegistry } = deps;
+  // SEC-GATE-3 posture: when required, an authenticated request must carry a client_request_id
+  // (issue #82) so replay detection cannot be bypassed by omission. Default from env, back-compat off.
+  const requireIdempotencyKey = deps.requireIdempotencyKey ?? requiresIdempotencyKey();
   // Shared commitment store when provided (main() path); a per-server fallback keeps
   // legacy call sites that never touch create_intent working unchanged.
   const intentStore = deps.intentStore ?? new IntentStore();
@@ -209,6 +216,14 @@ function buildServer(deps: ServerDeps): McpServer {
     server.tool(name, description, schema, async (args) => {
       const request_id = randomUUID();
       const { token, client_request_id } = args as { token?: string; client_request_id?: string };
+
+      // SEC-GATE-3 fail-closed posture (#82): when required, an authenticated request MUST carry a
+      // client_request_id — otherwise omitting it would silently bypass replay detection below.
+      // Generic INVALID_REQUEST (no disclosure of the reason, soap-fault-redaction §2).
+      if (requireIdempotencyKey && client_request_id === undefined) {
+        recordOutcome(guard.metricTool, ToolOutcome.INVALID_REQUEST);
+        return invalidRequestResult(request_id);
+      }
 
       // Replay first (SEC-GATE-3) — before auth, so a replay never reaches token validation.
       if (client_request_id !== undefined) {

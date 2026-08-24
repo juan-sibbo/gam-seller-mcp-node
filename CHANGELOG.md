@@ -361,6 +361,20 @@ surface, and durable ledger rotation state. Contract stays `0.2.0`.
   that restores the rotation cursor; legacy bare-array ledgers are migrated transparently on load.
   Pinned by a rotate → persist → reload → `replayVerify` test.
 
+## [0.8.12] — 2026-08-24
+
+Patch release. Closes the SEC-GATE-3 bypass-by-omission. Contract stays `0.2.0`.
+
+### Added
+
+- **`MCP_REQUIRE_IDEMPOTENCY_KEY` — mandatory replay key in production (issue #82).**
+  `client_request_id` drives SEC-GATE-3 (replay detection) but is optional by default, so a
+  request that simply omits it bypasses replay detection entirely. When this flag is set, an
+  authenticated request WITHOUT a `client_request_id` is rejected (generic `INVALID_REQUEST`, no
+  disclosure) on **every** authenticated surface — the replay gate can no longer be bypassed by
+  omission. Off by default for back-compat; a real deployment opts in, same fail-closed posture as
+  `MCP_REQUIRE_OPERATOR_CONFIG`.
+
 ## [0.8.11] — 2026-08-23
 
 Patch release. Two guardrails against misconfiguration and documentation drift. Contract stays `0.2.0`.
@@ -494,6 +508,7 @@ persistence path. Contract stays `0.2.0`.
   non-atomically. Pinned by a test that blocks the temp path and asserts the committed file
   survives.
 
+[0.8.12]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.12
 [0.8.11]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.11
 [0.8.10]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.10
 [0.8.9]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.9
