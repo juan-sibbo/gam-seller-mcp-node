@@ -78,8 +78,9 @@ Every call flows through the same pipeline before any domain logic runs:
 
 Each request-path gate rejects on failure. One honest caveat to the diagram above:
 
-- **`client_request_id`** (the replay-guard deduplication key) is optional; a request that omits
-  it bypasses SEC-GATE-3.
+- **`client_request_id`** (the replay-guard deduplication key) is optional by default; a request
+  that omits it bypasses SEC-GATE-3. A deployment can set `MCP_REQUIRE_IDEMPOTENCY_KEY` to make it
+  mandatory on every authenticated surface (fail-closed) — off by default for back-compat.
 
 The rate-limit stage covers **every** authenticated tool — the read surfaces, `create_intent`,
 and `revoke_intent` — so no authenticated surface bypasses it.
@@ -208,7 +209,7 @@ changes state over time is both a proof of honesty and a proof of progress.
 | Attribution (`buyer_id` / `request_id`) is stored per entry but sits **outside** the chain's tamper-evidence hash | `audit/event.ts` | Design decision, not a defect — traceability vs. erasability ([ADR-4](docs/adr/ADR-4.md)) | — |
 | Head-hash anchor rewrote its whole file each write (`writeFileSync`) — not append-only, no external WORM | `audit/anchor.ts` | ✅ **Closed** 2026-08-23 — append-only JSONL + injectable `AnchorSink`; selectable `tsa` (RFC 3161) and `s3` (S3 Object Lock) backends via `MCP_ANCHOR_SINK` | [#92](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/92) [#94](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/94) [#95](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/95) |
 | External WORM anchoring needs the operator to point at a live write-once destination (a TSA URL, or a locked bucket) — the node ships the backends, not the destination | `audit/anchor-tsa.ts`, `audit/anchor-s3.ts` | **Open** — deployment boundary (infra act) | — |
-| `client_request_id` (replay guard) is optional; omitting it bypasses SEC-GATE-3 | `src/server.ts` | **Open** | — |
+| `client_request_id` (replay guard) is optional by default; omitting it bypasses SEC-GATE-3 | `src/server.ts` | **Mitigated** 2026-08-24 — `MCP_REQUIRE_IDEMPOTENCY_KEY` makes it mandatory on every authenticated surface (fail-closed); optional by default for back-compat | [#82](https://github.com/juan-sibbo/gam-seller-mcp-node/issues/82) |
 | No TLS in transit (a reverse proxy is expected to terminate) | — | **Open** — deployment boundary | — |
 | `revoke_intent` is not covered by the rate-limit stage | `src/server.ts` | ✅ **Closed** 2026-08-18 — now behind the rate-limit gate like every authenticated surface | [#80](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/80) |
 | GDPR DSR CLI (`scripts/dsr.ts`, …) not shipped in the npm package | `package.json` `files` | ✅ **Closed** 2026-08 — ships as the `gam-seller-dsr` bin | [#78](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/78) |
