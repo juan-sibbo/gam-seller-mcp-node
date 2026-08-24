@@ -139,10 +139,12 @@ npm run build
 npm run start:http   # HTTP transport on 127.0.0.1:3900
 ```
 
-Run the full buyer-agent walkthrough (scripted demo):
+Run the full buyer-agent walkthrough (scripted demo) — the five native tools driven over a real
+in-process MCP transport, ending in the governed refusals (fail-closed auth, Default-Deny,
+fail-closed pricing) and a verified audit chain:
 
 ```bash
-npx tsx demo/run-demo.ts
+npm run demo          # or: npx tsx demo/run-demo.ts
 ```
 
 ### With Docker
