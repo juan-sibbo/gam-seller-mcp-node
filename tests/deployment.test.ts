@@ -85,3 +85,38 @@ describe("DeploymentConfig — shipped dev config matches signed acts", () => {
     expect(TEST_DEPLOYMENT_CONFIG.retention).toEqual(cfg.retention);
   });
 });
+
+// DRIFT-REPORT D4 — node_id_prefix is optional, but when present it becomes part of the
+// public, RS256-signed node_id, so it is validated fail-closed rather than silently ignored.
+describe("DeploymentConfig — node_id_prefix (D4)", () => {
+  const VALID = {
+    dsr_contact: "privacy@example.com",
+    controller_model: "operator-controller",
+    controller_name: "Test Operator",
+    retention: { hot_days: 90, archive_months: 12 },
+  };
+
+  it("accepts a valid DNS-safe prefix", () => {
+    expect(validateDeploymentConfig({ ...VALID, node_id_prefix: "telemadrid" }).node_id_prefix).toBe("telemadrid");
+    expect(validateDeploymentConfig({ ...VALID, node_id_prefix: "rtv-3" }).node_id_prefix).toBe("rtv-3");
+  });
+
+  it("leaves node_id_prefix undefined when absent (backward compatible)", () => {
+    expect(validateDeploymentConfig(VALID).node_id_prefix).toBeUndefined();
+  });
+
+  it.each([
+    "Telemadrid", // uppercase
+    "has space",
+    "-lead", // leading hyphen
+    "trail-", // trailing hyphen
+    "under_score",
+    "a".repeat(41), // too long
+  ])("rejects invalid prefix %j — it must be safe for a signed public id", (bad) => {
+    expect(() => validateDeploymentConfig({ ...VALID, node_id_prefix: bad })).toThrow(/node_id_prefix/);
+  });
+
+  it("rejects a non-string node_id_prefix", () => {
+    expect(() => validateDeploymentConfig({ ...VALID, node_id_prefix: 42 })).toThrow(/node_id_prefix/);
+  });
+});

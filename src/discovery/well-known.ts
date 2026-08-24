@@ -7,6 +7,16 @@ import type { DeploymentConfig } from "../config/deployment.js";
 // derived from the token's sub). Kept in sync with server.ts CONTRACT_VERSION.
 const CONTRACT_VERSION = "0.2.0";
 
+// Default node identity used when a deployment sets no node_id_prefix (DRIFT-REPORT D4).
+const DEFAULT_NODE_ID = "seller-mcp-node-mvp";
+
+// Derive the node_id advertised in the well-known document from the deployment config. A
+// publisher that sets node_id_prefix gets a distinguishable identity (`${prefix}-seller-mcp-node`);
+// absent → the shared default. Pure, so it can be unit-tested without signing.
+export function deriveNodeId(deployment: DeploymentConfig): string {
+  return deployment.node_id_prefix ? `${deployment.node_id_prefix}-seller-mcp-node` : DEFAULT_NODE_ID;
+}
+
 // Well-known capability document schema — e12-discovery-trust-anchor-signoff.md §7.
 // Content minimum: node_id, version, posture, capability_families, issued_at, signature.
 // privacy_posture block: privacy-consent-layer-fable-2026-07-03.md Pilar 2 (PROPUESTA, Pilar 2).
@@ -90,7 +100,9 @@ export class WellKnownService {
     private readonly privateKey: CryptoKey,
     private readonly publicKey: CryptoKey,
     deployment: DeploymentConfig,
-    private readonly nodeId = "seller-mcp-node-mvp"
+    // Defaults to the identity derived from the deployment (node_id_prefix, DRIFT-REPORT D4);
+    // an explicit value still overrides (used in tests).
+    private readonly nodeId = deriveNodeId(deployment)
   ) {
     this.privacyPosture = buildPrivacyPosture(deployment);
   }
