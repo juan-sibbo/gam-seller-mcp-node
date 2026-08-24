@@ -2,7 +2,7 @@ import { readFileSync } from "fs";
 import { resolveConfigPath } from "../config/resolve.js";
 import type { Entitlement } from "./types.js";
 import { AllowedSurface } from "./types.js";
-import { loadDsrState, saveDsrState, type DsrState } from "./dsr-state.js";
+import { loadDsrState, saveDsrState, hashBuyerId, DSR_STATE_SCHEMA_VERSION, type DsrState } from "./dsr-state.js";
 
 // Entitlements loaded from config — one entry per buyer_id.
 // Production: replace with signed config file or DB read gated by policy.
@@ -36,45 +36,54 @@ export class EntitlementStore {
     this.erased = new Set();
     this.persistPath = persistPath;
     if (persistPath) {
-      this.applyOverlay(loadDsrState(persistPath));
+      const migrated = this.applyOverlay(loadDsrState(persistPath));
+      // A legacy overlay stored raw buyer_ids in `suppressed`; applyOverlay hashed them into
+      // `erased`. Re-persist once so the raw ids are replaced on disk by their hashes (#83).
+      if (migrated) this.persist();
     }
   }
 
-  // Re-apply persisted DSR overrides on top of the config-derived index. Erasure takes
-  // precedence over restriction. Mutates maps directly (no re-persist during load).
-  private applyOverlay(state: DsrState): void {
-    for (const buyer_id of state.suppressed) {
-      this.index.delete(buyer_id);
-      this.suspended.delete(buyer_id);
-      this.erased.add(buyer_id);
+  // Re-apply persisted DSR overrides on top of the config-derived index. Erasure takes precedence
+  // over restriction. `erased` holds HASHES (#83); a v1 overlay stores hashes, a legacy overlay
+  // stores raw ids that are hashed here on load. Returns true if a legacy overlay was migrated.
+  private applyOverlay(state: DsrState): boolean {
+    const legacy = state.schema_version !== DSR_STATE_SCHEMA_VERSION;
+    for (const entry of state.suppressed) {
+      // v1 entries are already hashes; legacy entries are raw and must be hashed now.
+      this.erased.add(legacy ? hashBuyerId(entry) : entry);
     }
+    // `restricted` is always the raw buyer_id (a reversible Art. 18 restriction). Move the
+    // config-granted entitlement into `suspended`, skipping any buyer whose id is erased.
     for (const buyer_id of state.restricted) {
-      if (this.erased.has(buyer_id)) continue;
+      if (this.erased.has(hashBuyerId(buyer_id))) continue;
       const entitlement = this.index.get(buyer_id);
       if (entitlement) {
         this.index.delete(buyer_id);
         this.suspended.set(buyer_id, entitlement);
       }
     }
+    return legacy && state.suppressed.length > 0;
   }
 
   // Write the current DSR override set to the overlay file. No-op for in-memory stores.
   private persist(): void {
     if (!this.persistPath) return;
     saveDsrState(this.persistPath, {
-      suppressed: [...this.erased],
-      restricted: [...this.suspended.keys()],
+      schema_version: DSR_STATE_SCHEMA_VERSION,
+      suppressed: [...this.erased], // hashes (#83)
+      restricted: [...this.suspended.keys()], // raw (reversible Art. 18)
     });
   }
 
   get(buyer_id: string): Entitlement | undefined {
+    // An erased buyer must never be served, even if a later config re-grant put them back in the
+    // index — `erased` (hashed) is the authoritative "must never be served" set (#83).
+    if (this.erased.has(hashBuyerId(buyer_id))) return undefined;
     return this.index.get(buyer_id);
   }
 
   has(buyer_id: string): boolean {
-    // An erased buyer must never test as present, regardless of index state — `erased` is the
-    // authoritative "must never be served" set (guards a hypothetical future re-grant path).
-    return this.index.has(buyer_id) && !this.erased.has(buyer_id);
+    return this.index.has(buyer_id) && !this.erased.has(hashBuyerId(buyer_id));
   }
 
   // DSR restriction (Art. 18): stop processing without deleting the record.
@@ -104,7 +113,7 @@ export class EntitlementStore {
   // erasure durably, so it persists across restarts and is not undone by a later config re-grant.
   remove(buyer_id: string): boolean {
     const removed = this.index.delete(buyer_id) || this.suspended.delete(buyer_id);
-    this.erased.add(buyer_id);
+    this.erased.add(hashBuyerId(buyer_id)); // store the hash, never the raw id (#83)
     this.persist();
     return removed;
   }

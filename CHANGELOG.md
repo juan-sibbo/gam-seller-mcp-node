@@ -361,6 +361,23 @@ surface, and durable ledger rotation state. Contract stays `0.2.0`.
   that restores the rotation cursor; legacy bare-array ledgers are migrated transparently on load.
   Pinned by a rotate → persist → reload → `replayVerify` test.
 
+## [0.8.13] — 2026-08-24
+
+Patch release. Removes the raw `buyer_id` retained after an Art. 17 erasure. Contract stays `0.2.0`.
+
+### Hardened
+
+- **DSR suppression list stores a hash, not the raw `buyer_id` (issue #83).** The persistent DSR
+  overlay recorded an Art. 17 erasure by keeping the buyer's raw id in a `suppressed` list — so the
+  identity the erasure was meant to forget survived at rest. Enforcing "stay erased" only needs to
+  *recognise* the same id if it reappears, not retain it: `suppressed` now stores a one-way SHA-256
+  hash of the `buyer_id`, and the entitlement check hashes the incoming id to match. The hash is
+  stable (independent of the shreddable per-buyer ledger pseudonym, so it survives the crypto-shred)
+  and deterministic (a re-appearing erased buyer is still denied). A legacy overlay (raw ids) is
+  migrated to hashes transparently on first load (on-disk `schema_version: 1`). `restricted`
+  (Art. 18) stays the raw id by design — a restriction is a reversible limitation, and reinstating
+  the specific grant requires knowing who is restricted.
+
 ## [0.8.12] — 2026-08-24
 
 Patch release. Closes the SEC-GATE-3 bypass-by-omission. Contract stays `0.2.0`.
@@ -508,6 +525,7 @@ persistence path. Contract stays `0.2.0`.
   non-atomically. Pinned by a test that blocks the temp path and asserts the committed file
   survives.
 
+[0.8.13]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.13
 [0.8.12]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.12
 [0.8.11]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.11
 [0.8.10]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.10
