@@ -94,6 +94,13 @@ resetting to an empty chain.
 
 ## Quick start
 
+> **Run a full pilot in one command.** `scripts/pilot.sh` brings the node up on your config with
+> production guards on, mints a buyer token per entitled buyer, and prints how to drive a buyer
+> agent through the whole loop (discover → forecast → commit → revoke) — see
+> [`docs/PILOT-QUICKSTART.md`](docs/PILOT-QUICKSTART.md). The reference buyer agent lives at
+> [`examples/buyer-client-ts/agent.ts`](examples/buyer-client-ts/agent.ts); hosting behind TLS is a
+> filled-in-the-blanks recipe in [`deploy/`](deploy/README.md).
+
 ### Install in an MCP client (via npx)
 
 Add the server to your MCP client (Claude Desktop, Claude Code, Cursor, …):

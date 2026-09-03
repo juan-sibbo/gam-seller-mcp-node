@@ -1,0 +1,20 @@
+# TLS termination + reverse proxy for the GAM Seller MCP Node.
+#
+# Caddy obtains and renews a real certificate for {$DOMAIN} automatically (ACME/Let's Encrypt),
+# so buyer agents connect over HTTPS while the node speaks plaintext HTTP on the internal Docker
+# network. This closes the "no TLS in transit" deployment-boundary item (README known-limitations,
+# issue #86) with zero node code — TLS is an infra concern, terminated here.
+#
+# Only the buyer-facing surfaces are reachable through the proxy; /metrics is force-404'd here
+# (and the node itself already answers /metrics loopback-only, so this is defense in depth).
+
+{$DOMAIN} {
+	encode gzip
+
+	# Never expose operator metrics off-host — not even through the proxy.
+	@metrics path /metrics
+	respond @metrics 404
+
+	# /mcp (StreamableHTTP), /.well-known/seller-mcp-capabilities, and /health all live here.
+	reverse_proxy seller-mcp-node:3900
+}

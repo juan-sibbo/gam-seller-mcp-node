@@ -23,6 +23,13 @@ keys/
 # These hold operational state — including buyer_ids in clear — and must never be committed.
 data/
 
+# Pilot launcher state (scripts/pilot.sh): data/, keys/, node.log, minted tokens.
+# Holds live keys + buyer_ids in clear — never commit.
+.pilot/
+
+# Deploy secrets — the filled-in env for the hosting recipe (deploy/.env.example is tracked).
+deploy/.env
+
 # OS
 .DS_Store
 Thumbs.db
