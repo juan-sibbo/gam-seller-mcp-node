@@ -1,5 +1,32 @@
 # Changelog
 
+## [Unreleased] — real-inventory pilot enablement
+
+Two config-driven seams that let a pilot run on a publisher's real inventory shape **without** a
+live GAM connection (the ForecastService adapter stays a stub pending a service account). No new
+MCP tools; the audience-blind, egress-deny-all, no-ad-server-writes posture is unchanged.
+
+### Seeded forecast source
+
+- **`config/forecast.json` (opt-in).** A `SeededForecastSource` seeds Low/Mid/High buckets from
+  operator-provided numbers — a one-time GAM report export, mapped through configurable
+  `thresholds`, or literal buckets. Absent → the deterministic synthetic source (unchanged v1
+  behavior); present-but-malformed → fail-closed (refuses to boot). Resolves the long-standing
+  bucket-threshold placeholder (blocker #6) with the publisher's own figures.
+- **Honesty invariant preserved.** Seeding makes buckets realistic but `ForecastEngine` still
+  labels every result `synthetic: true` — pre-loaded data is not a live avail. No live-GAM claim
+  is introduced (README ↔ code parity stays green).
+
+### Intent handoff sink
+
+- **`MCP_INTENT_HANDOFF=file` (opt-in).** Closes the loop: a committed intent is delivered to the
+  publisher's classic sales rails as a JSONL drop (`FileHandoffSink`), which an operator-owned
+  forwarder tails. Default is `NullHandoffSink` (no delivery; `create_intent` unchanged).
+- **Egress deny-all preserved.** The node makes no outbound calls — a URL value is refused with a
+  pointer to the file drop. Delivery is fire-and-forget off the request path: a slow/failing sink
+  never delays or fails the buyer's commit (the ledger is the record of record); failures surface
+  on `mcp_intent_handoff_total{outcome="failed"}` and stderr, never swallowed.
+
 ## [0.1.0] — 2026-07-22
 
 First tagged release. Everything below was developed iteratively and is now stable enough

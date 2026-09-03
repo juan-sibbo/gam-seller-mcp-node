@@ -18,8 +18,10 @@ import { CatalogStore, loadCatalogFromFile } from "./catalog/store.js";
 import { PricingStore, loadPricingFromFile } from "./pricing/store.js";
 import { projectFamily } from "./catalog/projection.js";
 import { IntentStore, DEFAULT_INTENT_TTL_MS, DEV_INTENT_PATH } from "./intent/store.js";
+import { resolveHandoffSink, NullHandoffSink, type HandoffSink } from "./intent/handoff.js";
 import { RateLimiter } from "./rate-limiter/limiter.js";
 import { ForecastEngine } from "./forecast/engine.js";
+import { loadForecastSourceFromFile, SeededForecastSource } from "./forecast/seeded-source.js";
 import { loadDeploymentConfigFromFile } from "./config/deployment.js";
 import { isDemoMode, demoFallbackFiles, assertOperatorConfigWhenRequired, requiresIdempotencyKey } from "./config/resolve.js";
 import { AuditLedger, DEV_LEDGER_PATH } from "./audit/ledger.js";
@@ -32,7 +34,7 @@ import { EventClass } from "./audit/event.js";
 import { startHttpServer, httpOptionsFromEnv } from "./http.js";
 import { buildHealthReport } from "./health.js";
 import { packageVersion } from "./config/paths.js";
-import { MetricsRegistry, MetricTool, ToolOutcome, AuthFailReason } from "./metrics/registry.js";
+import { MetricsRegistry, MetricTool, ToolOutcome, AuthFailReason, HandoffOutcome } from "./metrics/registry.js";
 import { randomUUID } from "crypto";
 
 // Buyer contract shape. Bumped 0.1.0 → 0.2.0 in v0.4 Bloque A: buyer surfaces no longer
@@ -81,6 +83,10 @@ interface ServerDeps {
   // client_request_id drives SEC-GATE-3 replay detection, so omitting it must not bypass the gate.
   // Absent → read from MCP_REQUIRE_IDEMPOTENCY_KEY (default off, back-compat). Injectable for tests.
   requireIdempotencyKey?: boolean;
+  // Delivery sink for a committed intent — closes the handoff loop to the publisher's classic
+  // sales rails (src/intent/handoff.ts). Optional/back-compat: absent → NullHandoffSink (no
+  // delivery, create_intent unchanged). main() passes the operator-selected sink (MCP_INTENT_HANDOFF).
+  handoffSink?: HandoffSink;
 }
 
 // revoke_intent throttle window (C-13). Deliberately shorter than create's ratified 30s: a
@@ -99,6 +105,9 @@ function buildServer(deps: ServerDeps): McpServer {
   const intentStore = deps.intentStore ?? new IntentStore();
   const intentRateLimiter = deps.intentRateLimiter ?? new RateLimiter();
   const revokeIntentRateLimiter = deps.revokeIntentRateLimiter ?? new RateLimiter(REVOKE_INTENT_RATE_LIMIT_WINDOW_MS);
+  // Handoff delivery — NullHandoffSink by default so create_intent is unchanged when no handoff
+  // is configured (main() injects the operator-selected sink).
+  const handoffSink = deps.handoffSink ?? new NullHandoffSink();
   const policy = new PolicyEngine(store);
 
   // Record a handler's terminal outcome: the labelled call counter plus the current
@@ -380,6 +389,35 @@ function buildServer(deps: ServerDeps): McpServer {
         { buyer_id, request_id }
       );
       recordOutcome(MetricTool.CREATE_INTENT, ToolOutcome.SUCCESS);
+
+      // Close the handoff loop — deliver the committed intent to the publisher's classic sales
+      // rails via the operator-configured sink. FIRE-AND-FORGET, off the request's critical path:
+      // a slow/failing sink must NEVER delay the buyer's response nor fail the commit (the ledger
+      // already holds the record of record above). The failure is surfaced (metric + stderr),
+      // never swallowed. Payload goes to the publisher's OWN first-party system, so it MAY carry
+      // firm_price / buyer_id — this is not the pseudonymized ledger.
+      void handoffSink
+        .emit({
+          intent_id: intent.intent_id,
+          buyer_id,
+          family_id,
+          period,
+          firm_price: intent.firm_price,
+          currency: intent.currency,
+          created_at: intent.created_at,
+          expires_at: intent.expires_at,
+        })
+        .then(() => {
+          metricsRegistry?.increment("mcp_intent_handoff_total", { outcome: HandoffOutcome.DELIVERED });
+        })
+        .catch((err: unknown) => {
+          metricsRegistry?.increment("mcp_intent_handoff_total", { outcome: HandoffOutcome.FAILED });
+          process.stderr.write(
+            `[handoff] intent ${intent.intent_id} delivery failed (${handoffSink.kind}): ` +
+              `${err instanceof Error ? err.message : String(err)}\n`
+          );
+        });
+
       return {
         content: [{ type: "text", text: JSON.stringify({
           intent_id: intent.intent_id,
@@ -509,7 +547,19 @@ async function main() {
     );
   }
   const rateLimiter = new RateLimiter();
-  const forecastEngine = new ForecastEngine();
+  // Forecast source: opt-in seeded buckets from config/forecast.json (a one-time GAM report
+  // export — realistic numbers, NOT a live avail), else the deterministic synthetic source.
+  // Either way the engine keeps `synthetic: true` — seeding makes buckets real, not the read
+  // live (the live GAM adapter stays a stub pending a service account, issue #4).
+  const forecastSource = loadForecastSourceFromFile();
+  const forecastEngine = new ForecastEngine(forecastSource);
+  if (forecastSource instanceof SeededForecastSource) {
+    process.stderr.write(
+      `[forecast] Seeded forecast source active (config/forecast.json, ${forecastSource.seedCount()} ` +
+        `family/period pairs) — buckets reflect operator-provided avails; results stay labeled ` +
+        `synthetic (pre-loaded, not a live GAM read).\n`
+    );
+  }
   const forecastRateLimiter = new RateLimiter();
   const replayGuard = new ReplayGuard();
   // Shared commitment store (v0.5 Bloque B) — one instance for the whole process so
@@ -526,6 +576,17 @@ async function main() {
   // Shared metrics registry — the same instance backs both the tool handlers and the
   // /metrics HTTP route, so counters recorded in-handler are visible at scrape time.
   const metricsRegistry = new MetricsRegistry();
+
+  // Handoff delivery sink (MCP_INTENT_HANDOFF) — closes the loop so a committed intent reaches
+  // the publisher's classic sales rails. Default is NullHandoffSink (no delivery). A notification,
+  // NOT a GAM order or inventory hold. Fail-closed on a misconfigured destination (resolve throws).
+  const handoffSink = resolveHandoffSink();
+  if (handoffSink.kind !== "null") {
+    process.stderr.write(
+      `[handoff] Intent handoff sink active (${handoffSink.kind}) — committed intents are delivered ` +
+        `to the publisher's sales rails. A notification, not a GAM order/hold.\n`
+    );
+  }
 
   // Audit chain: pseudonymized ledger + external head-hash anchoring (S3, wired S7).
   const pseudonyms = new PseudonymService(DEV_PSEUDONYM_KEYS_PATH);
@@ -575,7 +636,7 @@ async function main() {
   sweepExpiredIntents(intentStore, ledger);
   setInterval(() => sweepExpiredIntents(intentStore, ledger), INTENT_SWEEP_INTERVAL_MS).unref();
 
-  const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, intentStore, intentRateLimiter, revokeIntentRateLimiter, metricsRegistry };
+  const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, intentStore, intentRateLimiter, revokeIntentRateLimiter, metricsRegistry, handoffSink };
 
   // Fase A: --http serves StreamableHTTP on 127.0.0.1 (external bind = infra act, #8/#10).
   // Default remains stdio for MCP-host usage.
