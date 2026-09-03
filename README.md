@@ -168,6 +168,7 @@ deployment.json     # DSR contact, controller model, data retention window
 catalog.json        # product families + per-buyer access grants
 entitlements.json   # which buyers are entitled to which MCP surfaces
 pricing.json        # firm list prices per family (fail-closed on expiry)
+forecast.json       # OPTIONAL — seed availability buckets from real numbers (still synthetic-labeled)
 ```
 
 **Invalid** config always fails closed: a malformed file stops the node rather than running
@@ -175,6 +176,21 @@ with a silently different access policy. **Absent** config (no `config/` and no 
 drops to the bundled [`config/examples/pilot-publisher/`](config/examples/pilot-publisher/)
 example — demo mode, announced on stderr — so the node is never a broken install, only ever a
 real deployment or a clearly-labelled demo.
+
+**Taking a pilot onto real inventory** (short of a live GAM connection) is all configuration —
+see [`docs/PUBLISHER-DEPLOYMENT.md`](docs/PUBLISHER-DEPLOYMENT.md):
+
+- **Seed the forecast** with the publisher's own availability, exported once from a GAM report,
+  via an optional `forecast.json` (template: [`config/examples/pilot-publisher/forecast.sample.json`](config/examples/pilot-publisher/forecast.sample.json)).
+  Buckets become realistic while every result stays `synthetic: true` — pre-loaded is not a live
+  read, so no live-GAM claim is made.
+- **Close the handoff loop** so a committed intent reaches the publisher's sales rails, via
+  `MCP_INTENT_HANDOFF=file` (a local JSONL drop an operator forwarder tails). The node makes **no
+  outbound calls** (SSRF/egress deny-all) — a handoff record is a notification, never a GAM order
+  or inventory hold.
+- **Harden for the road**: `MCP_REQUIRE_OPERATOR_CONFIG=1` (refuse to boot on demo config),
+  `MCP_REQUIRE_IDEMPOTENCY_KEY=1` (close the replay-bypass), `MCP_ANCHOR_SINK=tsa` (anchor the
+  audit trail to a third party).
 
 ## Why not just use the GAM API directly?
 

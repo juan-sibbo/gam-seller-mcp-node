@@ -19,10 +19,19 @@ import { fileURLToPath } from "url";
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const EXAMPLE_DIR = join(repoRoot, "config", "examples", "pilot-publisher");
 
+// The operator (or repo) config directory — MCP_CONFIG_DIR when set, else the repo's own
+// config/. This is the SAME directory resolveConfigPath() treats as tier 1, but exposed WITHOUT
+// the bundled-example fallback: an opt-in loader (e.g. the seeded forecast source) must look only
+// here, so a missing OPTIONAL file never trips the demo-fallback machinery — and thus never trips
+// MCP_REQUIRE_OPERATOR_CONFIG. Read lazily — an operator/test may set the env after import.
+export function operatorConfigDir(): string {
+  return process.env.MCP_CONFIG_DIR ?? join(repoRoot, "config");
+}
+
 // Read lazily, not at import time: an operator (or a test) may set MCP_CONFIG_DIR
 // after this module is first imported.
 function configDir(): string {
-  return process.env.MCP_CONFIG_DIR ?? join(repoRoot, "config");
+  return operatorConfigDir();
 }
 
 const demoFallbacks = new Set<string>();

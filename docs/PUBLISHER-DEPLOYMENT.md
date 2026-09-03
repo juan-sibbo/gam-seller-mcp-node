@@ -96,6 +96,37 @@ entitlement to call `get_forecast`. Missing either returns `AUTH_FAILED`.
 Prices are optional. If a family has no price entry, `pricing_options` is omitted from the
 `discover_products` response for that family. Expired prices fail closed (omitted), never stale.
 
+### `config/forecast.json` — seed availability from real numbers (optional)
+
+By default `get_forecast` returns a deterministic **synthetic** bucket. For a pilot on real
+inventory you can seed the buckets from the publisher's own availability — a **one-time GAM
+report export**, not a live API call — so the Low/Mid/High answers reflect real seasonality.
+
+```json
+{
+  "thresholds": { "mid": 2000000, "high": 20000000 },
+  "buckets": [
+    { "family_id": "display-ros",   "period": "Q4-2026", "avail_impressions": 24500000 },
+    { "family_id": "video-pre-roll","period": "Q4-2026", "avail_impressions": 1200000 },
+    { "family_id": "branded-content","period": "Q4-2026", "bucket": "low" }
+  ]
+}
+```
+
+Each entry sets **exactly one** of `avail_impressions` (mapped through `thresholds`:
+`>= high → high`, `>= mid → mid`, else `low`) or a literal `bucket`. An unseeded family/period
+falls through to the synthetic source, so a partial seed still answers every request. A copy-ready
+template lives at [`config/examples/pilot-publisher/forecast.sample.json`](../config/examples/pilot-publisher/forecast.sample.json).
+
+> **Still labeled synthetic.** Seeding makes the numbers realistic, but the node keeps
+> `synthetic: true` on every forecast result — pre-loaded data is not a live avail. The live GAM
+> ForecastService adapter remains a stub until a service account is provisioned (see
+> [The last mile](#the-last-mile--live-gam)). This keeps the node honest: it never claims a live
+> GAM connection it does not have.
+
+Omit the file entirely to keep the v1 synthetic behavior. A present-but-malformed `forecast.json`
+fails closed (the node refuses to start) — the same contract as the other config files.
+
 ## Step 3 — Run
 
 ### stdio (for MCP-host clients like Claude Desktop)
@@ -238,6 +269,72 @@ import { DsrToolkit } from "gam-seller-mcp-node/dist/dsr/toolkit.js";
 
 See [`src/dsr/toolkit.ts`](../src/dsr/toolkit.ts) for the API and [`src/dsr/cli.ts`](../src/dsr/cli.ts)
 for the CLI that wraps it.
+
+## Closing the handoff loop
+
+A `create_intent` records a firm, time-boxed commitment — but by default nothing tells your sales
+team it happened. To close the loop, enable the **handoff sink** so every committed intent is
+delivered to your classic sales rails:
+
+```
+MCP_INTENT_HANDOFF=file
+MCP_INTENT_HANDOFF_FILE=/var/lib/gam-seller/data/intent-handoff.jsonl   # optional; this is the default under MCP_DATA_DIR
+```
+
+The node appends one JSON line per commitment (`intent_id`, `buyer_id`, `family_id`, `period`,
+`firm_price`, `currency`, `expires_at`). Point your own forwarder at that file — a cron importer,
+a webhook shim, a CRM sync, whatever fits. A committed record looks like:
+
+```json
+{"intent_id":"…","buyer_id":"wemass-buyer-001","family_id":"display-ros","period":"Q4-2026","firm_price":4.5,"currency":"EUR","created_at":"…","expires_at":"…"}
+```
+
+Two deliberate properties:
+
+- **The node makes no outbound calls.** Delivery is a local file drop; forwarding is your process,
+  not the node's. This preserves the node's SSRF/egress deny-all posture — a URL in
+  `MCP_INTENT_HANDOFF` is refused, with a pointer back to the file drop.
+- **A handoff is a notification, never a hold.** It does not touch an ad server, reserve inventory,
+  or create a GAM order. Delivery is fire-and-forget: a slow or failing forwarder never delays or
+  fails the buyer's commit (the audit ledger is the record of record). Delivery outcomes are on the
+  `mcp_intent_handoff_total` metric.
+
+## Pilot road-readiness checklist
+
+Going from the demo track to a real pilot ("secondary roads") is all configuration. Set these and
+you are running on the publisher's real data with production-grade guards, short of a live GAM
+connection:
+
+```
+MCP_CONFIG_DIR=/etc/gam-seller/config    # your real deployment/catalog/entitlements/pricing(+forecast).json
+MCP_REQUIRE_OPERATOR_CONFIG=1            # refuse to boot on the bundled demo example (no accidental demo in prod)
+MCP_REQUIRE_IDEMPOTENCY_KEY=1            # every authenticated request must carry client_request_id (closes replay bypass #82)
+MCP_ANCHOR_SINK=tsa                      # anchor the audit head-hash to an RFC 3161 timestamp authority (third-party tamper-evidence)
+MCP_INTENT_HANDOFF=file                  # close the handoff loop to your sales rails
+```
+
+- Put the HTTP transport behind a reverse proxy that terminates **TLS** (the node speaks plaintext
+  HTTP on loopback by design — issue #86).
+- Mint buyer tokens with [`scripts/issue-buyer-token.ts`](../scripts/issue-buyer-token.ts) and hand
+  one to each buyer agent; identity is derived from the token's `sub`, never a request argument.
+- Verify the boot log shows `Seeded forecast source active` and `Intent handoff sink active`, and
+  that **no** `[demo]` line appears (proof you are on real config, not the example).
+
+## The last mile — live GAM
+
+Everything above runs **without** a Google Ad Manager connection. The final step — replacing the
+seeded/synthetic forecast with live avails — needs credentials only you can provide:
+
+1. A **GAM service account** with the **ForecastService** scope granted inside the network
+   (issue #4, DP-AB-01 §5.2). Existing order-injection service accounts prove org-level API access
+   exists, but this integration needs its own credential and scope.
+2. Wire it into [`src/forecast/source.ts`](../src/forecast/source.ts) — the `GamForecastSource`
+   seam already exists as a stub; it throws until the SOAP call to `getAvailabilityForecast` is
+   implemented against that credential.
+
+Until then the node is honest by construction: `synthetic: true` on every forecast, and no
+ad-server write path exists anywhere. Provision the service account and the same seam flips from
+seeded-synthetic to live — no other code changes.
 
 ## Troubleshooting
 

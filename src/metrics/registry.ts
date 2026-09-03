@@ -39,6 +39,15 @@ export const AuthFailReason = {
 } as const;
 export type AuthFailReason = (typeof AuthFailReason)[keyof typeof AuthFailReason];
 
+// Outcome of a committed-intent handoff delivery to the publisher's sales rails (see
+// src/intent/handoff.ts). Aggregate-only, no buyer-derived value — same security invariant
+// as every other label here.
+export const HandoffOutcome = {
+  DELIVERED: "delivered",
+  FAILED: "failed",
+} as const;
+export type HandoffOutcome = (typeof HandoffOutcome)[keyof typeof HandoffOutcome];
+
 // Counter metric definitions: name → { help, label keys (ordered) }.
 interface CounterDef {
   help: string;
@@ -61,6 +70,10 @@ const COUNTERS: Record<string, CounterDef> = {
   mcp_replay_rejected_total: {
     help: "Total requests rejected as replays, by tool.",
     labelKeys: ["tool"],
+  },
+  mcp_intent_handoff_total: {
+    help: "Total committed-intent handoff deliveries to the publisher's sales rails, by outcome.",
+    labelKeys: ["outcome"],
   },
 };
 

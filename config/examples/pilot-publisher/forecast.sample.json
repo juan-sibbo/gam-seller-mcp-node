@@ -1,0 +1,10 @@
+{
+  "_comment": "OPT-IN seeded forecast for a real-inventory pilot. Rename to forecast.json inside your MCP_CONFIG_DIR to activate. Values are a ONE-TIME GAM report export, NOT a live avail — the node still labels every forecast result synthetic:true (pre-loaded is not a live read). Absent → the deterministic synthetic source (v1 behavior). Each bucket entry sets EXACTLY ONE of `bucket` (low|mid|high) or `avail_impressions` (mapped through `thresholds`). An unseeded family/period falls through to the synthetic source, so a partial seed still answers every request.",
+  "thresholds": { "mid": 2000000, "high": 20000000 },
+  "buckets": [
+    { "family_id": "display-ros", "period": "Q4-2026", "avail_impressions": 24500000 },
+    { "family_id": "display-ros", "period": "Q1-2027", "avail_impressions": 9800000 },
+    { "family_id": "video-pre-roll", "period": "Q4-2026", "avail_impressions": 1200000 },
+    { "family_id": "branded-content", "period": "Q4-2026", "bucket": "low" }
+  ]
+}
