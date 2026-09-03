@@ -3,9 +3,10 @@
 // transport, so it speaks the real protocol rather than hand-rolled HTTP.
 //
 // Scope: this is an EXAMPLE, not a published package. It shows an AI buyer agent (or its
-// author) how to (1) read the RS256-signed capability document, (2) discover product
-// families, and (3) pull a coarse availability forecast — all read-only, all subject to the
-// node's Default-Deny gate.
+// author) how to (1) read the RS256-signed capability document, (2) discover product families,
+// (3) pull a coarse availability forecast, and (4) place + withdraw a firm buying intent (the
+// commit loop) — all subject to the node's Default-Deny gate. A firm intent is the sole write
+// surface: a soft, TTL'd commitment, never a GAM order or inventory hold.
 //
 // Out of scope here (by design, tracked for the full SDK #5): buyer token minting (obtain
 // one from the node operator via scripts/issue-buyer-token.ts), JWS signature verification
@@ -53,6 +54,20 @@ export interface ForecastResult {
   period: string;
   bucket: string;
   synthetic: boolean;
+}
+
+export interface IntentResult {
+  intent_id: string;
+  status: string;
+  firm_price: number;
+  expires_at: string;
+  request_id: string;
+}
+
+export interface RevokeResult {
+  intent_id: string;
+  status: string;
+  request_id: string;
 }
 
 export interface CallOptions {
@@ -134,6 +149,36 @@ export class SellerMcpBuyerClient {
       ...argsFrom(opts, this.defaultToken),
     });
     return JSON.parse(text) as ForecastResult;
+  }
+
+  // Register a firm buying intent at the family's CURRENT firm price (the sole write surface —
+  // a soft, TTL'd commitment, NOT a GAM order or inventory hold). `priceRef` must match the firm
+  // price the node advertises; a mismatch/stale price is rejected as INVALID_REQUEST. Pass a fresh
+  // `clientRequestId` per call: the node's replay guard is idempotent on it, and a deployment with
+  // MCP_REQUIRE_IDEMPOTENCY_KEY=1 requires it.
+  async createIntent(
+    familyId: string,
+    period: string,
+    priceRef: number,
+    opts: CallOptions = {}
+  ): Promise<IntentResult> {
+    const text = await this.callToolText("create_intent", {
+      family_id: familyId,
+      period,
+      price_ref: priceRef,
+      ...argsFrom(opts, this.defaultToken),
+    });
+    return JSON.parse(text) as IntentResult;
+  }
+
+  // Withdraw one of your OWN active intents by id. Buyer-scoped: revoking anything that is not your
+  // own active intent returns the same generic INVALID_REQUEST (you cannot probe others' intents).
+  async revokeIntent(intentId: string, opts: CallOptions = {}): Promise<RevokeResult> {
+    const text = await this.callToolText("revoke_intent", {
+      intent_id: intentId,
+      ...argsFrom(opts, this.defaultToken),
+    });
+    return JSON.parse(text) as RevokeResult;
   }
 
   // Calls a tool and returns its first text content, converting a Default-Deny error result

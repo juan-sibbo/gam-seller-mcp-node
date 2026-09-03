@@ -1,0 +1,51 @@
+# Production hosting recipe: the GAM Seller MCP Node behind Caddy (automatic HTTPS).
+#
+# Everything here is configuration. Fill in deploy/.env (DOMAIN + CONFIG_DIR), then:
+#
+#   docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env up -d --build
+#
+# The node is NOT published to the host — only Caddy is (80/443). Buyer agents connect to
+# https://$DOMAIN/mcp. The node runs with the production guards on (real config required,
+# idempotency key required); mint buyer tokens with scripts/issue-buyer-token.ts against the
+# same data/keys volumes (e.g. `docker compose ... exec seller-mcp-node ...`).
+
+services:
+  seller-mcp-node:
+    build:
+      context: ..
+    environment:
+      MCP_HTTP_HOST: 0.0.0.0                 # reachable by Caddy over the compose network only
+      MCP_HTTP_PORT: "3900"
+      MCP_REQUIRE_OPERATOR_CONFIG: "1"       # refuse to boot on the bundled demo example
+      MCP_REQUIRE_IDEMPOTENCY_KEY: "1"       # close the SEC-GATE-3 replay bypass (#82)
+      MCP_ANCHOR_SINK: "${MCP_ANCHOR_SINK:-file}"   # "tsa" / "s3" for third-party WORM tamper-evidence
+      MCP_INTENT_HANDOFF: "file"             # close the handoff loop (JSONL drop on the data volume)
+      MCP_INTENT_HANDOFF_FILE: "/app/data/intent-handoff.jsonl"
+    volumes:
+      - mcp-keys:/app/keys
+      - mcp-data:/app/data
+      - "${CONFIG_DIR:-./config}:/app/config:ro"   # your real operator config
+    expose:
+      - "3900"                               # internal only — never mapped to the host
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    depends_on:
+      - seller-mcp-node
+    environment:
+      DOMAIN: "${DOMAIN:?set DOMAIN in deploy/.env}"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+
+volumes:
+  mcp-keys:
+  mcp-data:
+  caddy-data:
+  caddy-config:
