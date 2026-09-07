@@ -279,6 +279,36 @@ describe("server integration — policy gate on every authenticated surface (#67
     expect(names).toEqual(expected);
   });
 
+  // Machine-readable governance: every surface declares MCP tool annotations so a buyer agent
+  // can reason about safety BEFORE calling — read-only reads vs the single write surface, and
+  // which write is destructive/idempotent. This is the node's no-auto-execution posture made
+  // legible in the protocol; a new tool without honest hints breaks this and must be classified.
+  it("declares governance annotations on every tool (read-only vs write/destructive)", async () => {
+    const { tools } = await ctx.client.listTools();
+    const ann = (name: string) => tools.find((t) => t.name === name)?.annotations;
+
+    // Read surfaces: no state mutation, closed world (own inventory, no open-ended external calls).
+    for (const name of ["well_known_capabilities", "discover_products", "get_forecast"]) {
+      expect(ann(name)?.readOnlyHint, `${name} must be read-only`).toBe(true);
+      expect(ann(name)?.openWorldHint, `${name} must be closed-world`).toBe(false);
+    }
+
+    // create_intent: the sole write surface — mutating, non-destructive, non-idempotent.
+    expect(ann("create_intent")?.readOnlyHint).toBe(false);
+    expect(ann("create_intent")?.destructiveHint).toBe(false);
+    expect(ann("create_intent")?.idempotentHint).toBe(false);
+
+    // revoke_intent: destructive (withdraws a commitment) yet idempotent (revoking twice = same state).
+    expect(ann("revoke_intent")?.readOnlyHint).toBe(false);
+    expect(ann("revoke_intent")?.destructiveHint).toBe(true);
+    expect(ann("revoke_intent")?.idempotentHint).toBe(true);
+
+    // Every surface carries a human-friendly display title.
+    for (const t of tools) {
+      expect(t.annotations?.title, `${t.name} must carry a display title`).toBeTruthy();
+    }
+  });
+
   it("denies an authenticated-but-unentitled buyer on EVERY authenticated tool (routes through policy)", async () => {
     for (const tool of AUTHENTICATED_TOOLS) {
       const result = await callAuthed(ctx, tool.name, UNKNOWN_BUYER, tool.extra);
