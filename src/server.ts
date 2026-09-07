@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { isEntrypoint } from "./entrypoint.js";
 import { PolicyEngine } from "./policy/engine.js";
@@ -219,10 +220,11 @@ function buildServer(deps: ServerDeps): McpServer {
     name: string,
     description: string,
     schema: z.ZodRawShape,
+    annotations: ToolAnnotations,
     guard: { surface: AllowedSurface; metricTool: MetricTool; rateLimiter?: RateLimiter },
     handle: (args: Args, ctx: GuardedContext) => ToolResult | Promise<ToolResult>
   ): void {
-    server.tool(name, description, schema, async (args) => {
+    server.tool(name, description, schema, annotations, async (args) => {
       const request_id = randomUUID();
       const { token, client_request_id } = args as { token?: string; client_request_id?: string };
 
@@ -282,6 +284,11 @@ function buildServer(deps: ServerDeps): McpServer {
     "well_known_capabilities",
     "Return the signed RS256 capability document for this Seller MCP Node.",
     {},
+    {
+      title: "Capabilities & Trust Anchor",
+      readOnlyHint: true,
+      openWorldHint: false,
+    },
     async () => {
       const signedDoc = await wellKnown.sign();
       // Public, unguarded surface — the only terminal outcome is success.
@@ -299,6 +306,7 @@ function buildServer(deps: ServerDeps): McpServer {
       token: z.string().optional().describe("Buyer bearer JWT (RS256, aud=seller-mcp-node). Identity is derived from token.sub."),
       client_request_id: z.string().optional().describe("Client-supplied idempotency key for replay detection"),
     },
+    { title: "Discover Products", readOnlyHint: true, openWorldHint: false },
     { surface: AllowedSurface.PRODUCT_DISCOVERY, metricTool: MetricTool.DISCOVER_PRODUCTS, rateLimiter },
     (_args, { buyer_id, request_id }) => {
       // Synthetic catalog from config — zero GAM (S4).
@@ -327,6 +335,7 @@ function buildServer(deps: ServerDeps): McpServer {
       token: z.string().optional().describe("Buyer bearer JWT (RS256, aud=seller-mcp-node). Identity is derived from token.sub."),
       client_request_id: z.string().optional().describe("Client-supplied idempotency key for replay detection"),
     },
+    { title: "Get Availability Forecast", readOnlyHint: true, openWorldHint: false },
     { surface: AllowedSurface.FORECAST, metricTool: MetricTool.GET_FORECAST, rateLimiter: forecastRateLimiter },
     async ({ family_id, period }, { buyer_id, request_id }) => {
       const result = await forecastEngine.forecast(family_id, period);
@@ -359,6 +368,7 @@ function buildServer(deps: ServerDeps): McpServer {
       token: z.string().optional().describe("Buyer bearer JWT (RS256, aud=seller-mcp-node). Identity is derived from token.sub."),
       client_request_id: z.string().optional().describe("Client-supplied idempotency key for replay detection"),
     },
+    { title: "Create Buying Intent", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     { surface: AllowedSurface.INTENT, metricTool: MetricTool.CREATE_INTENT, rateLimiter: intentRateLimiter },
     ({ family_id, period, price_ref }, { buyer_id, request_id }) => {
       // Fail-closed on a stale or non-matching firm price (plan §3): priceFor returns
@@ -447,6 +457,7 @@ function buildServer(deps: ServerDeps): McpServer {
       token: z.string().optional().describe("Buyer bearer JWT (RS256, aud=seller-mcp-node). Identity is derived from token.sub."),
       client_request_id: z.string().optional().describe("Client-supplied idempotency key for replay detection"),
     },
+    { title: "Revoke Buying Intent", readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     { surface: AllowedSurface.INTENT, metricTool: MetricTool.REVOKE_INTENT, rateLimiter: revokeIntentRateLimiter },
     ({ intent_id }, { buyer_id, request_id }) => {
       // Buyer-scoped: undefined when the intent is absent, another buyer's, terminal, or lapsed.
