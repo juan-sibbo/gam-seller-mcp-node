@@ -7,7 +7,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
 [![MCP](https://img.shields.io/badge/MCP-2024--11--05-green.svg)](https://modelcontextprotocol.io)
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes sell-side ad inventory to buyer-side AI agents: discovery, firm pricing, and a buyer-scoped soft commitment primitive. No writes to an ad server exist. The Google Ad Manager adapter is not yet connected; catalog and forecast data are synthetic.
+A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes sell-side ad inventory to buyer-side AI agents: discovery, firm pricing, and a buyer-scoped soft commitment primitive. No writes to an ad server exist. Forecasts can come live from Google Ad Manager (opt-in, read-only `ForecastService` snapshot); the catalog is operator config, and without a GAM connection forecast data is synthetic.
 
 ---
 
@@ -67,7 +67,7 @@ Every call flows through the same pipeline before any domain logic runs:
   [Rate limit]  N=1 / T=30s per buyer_id
        │
        ▼
-  [Domain]      Catalog / ForecastEngine — synthetic today, real GAM adapter in progress
+  [Domain]      Catalog / ForecastEngine — synthetic, seeded or live GAM forecast snapshot
        │
        ▼
   [Disclosure]  Response checked against the tool's strict schema — undeclared field → withheld
@@ -180,6 +180,7 @@ catalog.json        # product families + per-buyer access grants
 entitlements.json   # which buyers are entitled to which MCP surfaces
 pricing.json        # firm list prices per family (fail-closed on expiry)
 forecast.json       # OPTIONAL — seed availability buckets from real numbers (still synthetic-labeled)
+gam.json            # OPTIONAL — live GAM forecast (network, service-account key path, family → targeting)
 ```
 
 **Invalid** config always fails closed: a malformed file stops the node rather than running
@@ -195,6 +196,14 @@ see [`docs/PUBLISHER-DEPLOYMENT.md`](docs/PUBLISHER-DEPLOYMENT.md):
   via an optional `forecast.json` (template: [`config/examples/pilot-publisher/forecast.sample.json`](config/examples/pilot-publisher/forecast.sample.json)).
   Buckets become realistic while every result stays `synthetic: true` — pre-loaded is not a live
   read, so no live-GAM claim is made.
+- **Connect GAM live** with an optional `gam.json` (template:
+  [`config/examples/pilot-publisher/gam.sample.json`](config/examples/pilot-publisher/gam.sample.json))
+  and a service account added to the GAM network with a read role that can run forecasts. The
+  node asks `ForecastService.getAvailabilityForecast` for every configured family × period at boot
+  and every 30 minutes, using **prospective line items that are never saved** — nothing in GAM is
+  created, modified or reserved. Buyers are answered from that snapshot as Low/Mid/High buckets
+  with `synthetic: false`; raw availability never leaves the node. Precedence:
+  `gam.json` > `forecast.json` > synthetic.
 - **Close the handoff loop** so a committed intent reaches the publisher's sales rails, via
   `MCP_INTENT_HANDOFF=file` (a local JSONL drop an operator forwarder tails). The handoff makes
   **no outbound call** — forwarding is the operator's process, and a URL value is refused. A
@@ -204,7 +213,9 @@ see [`docs/PUBLISHER-DEPLOYMENT.md`](docs/PUBLISHER-DEPLOYMENT.md):
   audit trail to a third party).
 
 **Network egress — declared and bounded, not deny-all.** Buyer request handling makes no outbound
-network calls. Optional audit anchoring can generate operator-configured egress outside the buyer
+network calls. The live GAM forecast (`gam.json`) calls Google's OAuth token endpoint and the Ad
+Manager SOAP API for the configured network, at boot and on the 30-minute refresh cycle — never
+inside a buyer request, so buyers cannot generate load on the publisher's GAM. Optional audit anchoring can generate operator-configured egress outside the buyer
 request path (at boot and on the periodic anchor cycle): the TSA backend (`MCP_ANCHOR_SINK=tsa`)
 submits the ledger head hash to the configured RFC 3161 authority; the S3 backend
 (`MCP_ANCHOR_SINK=s3`) writes the anchor record to the configured Object Lock bucket; a custom
@@ -233,10 +244,11 @@ state, fail-closed load), and the head-hash anchor is append-only with selectabl
 backends (RFC 3161 timestamping / S3 Object Lock) — see [Known limitations](#current-status)
 for the residual (a live write-once destination is an operator infra act).
 
-**Not yet wired**: a live Google Ad Manager connection. The catalog and forecast data are
-synthetic, loaded from local config. The GAM ForecastService SOAP adapter interface exists
-([`src/forecast/source.ts`](src/forecast/source.ts)) as a stub — it throws on any call until a
-service account is provisioned (DP-AB-01 §5.2). See the
+**GAM connection — forecast only**: the live adapter
+([`src/forecast/gam-source.ts`](src/forecast/gam-source.ts)) reads availability from GAM's
+ForecastService when `gam.json` is present. Catalog families and their GAM targeting (ad units,
+sizes, environment) are still mapped by hand in config, and prices remain static list prices.
+Without `gam.json` the forecast is synthetic (or seeded) and says so (`synthetic: true`). See the
 [open issues](https://github.com/juan-sibbo/gam-seller-mcp-node/issues) for the roadmap.
 
 **Known limitations** — dated status. Closed rows are kept on purpose: a limitations list that
@@ -267,7 +279,8 @@ Key modules:
 | `src/identity/` | RS256 key management, token issuance/validation, revocation denylist |
 | `src/audit/` | Hash-chained ledger, HMAC pseudonymization, append-only head-hash anchoring with selectable WORM backends (`anchor-tsa.ts`, `anchor-s3.ts`) |
 | `src/pricing/` | Firm list price store, expiry-aware (fail-closed on stale prices) |
-| `src/forecast/` | Bucket engine + GAM adapter seam (synthetic today) |
+| `src/forecast/` | Bucket engine + sources: synthetic, seeded, live GAM snapshot |
+| `src/gam/` | Service-account OAuth + minimal Ad Manager SOAP client (read-only) |
 | `src/dsr/` | GDPR Art. 15/17/18/20 data-subject-rights toolkit (also shipped as the `gam-seller-dsr` bin) |
 | `src/catalog/` | Product family store, per-buyer access grants |
 
@@ -313,7 +326,7 @@ existing design decisions:
 |---------------------|-----------|
 | Protection by design and by default | Default-Deny: every surface denied unless an explicit entitlement grants access |
 | Record and document agent actions | Append-only hash-chained audit ledger; every allow/deny recorded before the response is sent |
-| Control what leaves toward third parties, and with what traceability | Buyer-facing disclosure allowlist (SEC-GATE-*): exact pricing, deal IDs and raw availability are permanently blocked from responses. Network egress allowlist: the only outbound connections are the operator-opted audit anchors (see *Network egress* above), pinned by CI |
+| Control what leaves toward third parties, and with what traceability | Buyer-facing disclosure allowlist (SEC-GATE-*): exact pricing, deal IDs and raw availability are permanently blocked from responses. Network egress allowlist: the only outbound connections are the operator-opted audit anchors and the operator-opted GAM forecast refresh (see *Network egress* above), pinned by CI |
 | Govern agent memory with purpose and retention rules | DSR toolkit (Arts. 15/17/18/20); configurable retention window enforced on the audit ledger |
 
 This alignment is declared machine-readably in the signed well-known document
@@ -388,7 +401,7 @@ need them must clone the repository.
 See the [open issues](https://github.com/juan-sibbo/gam-seller-mcp-node/issues) for the full
 roadmap. Highlights:
 
-- **Real GAM adapter** — wire `getAvailabilityForecast` via the ForecastService SOAP API
+- **GAM inventory mapping** — derive family targeting from GAM ad units/placements instead of hand-written `gam.json`
 - **Buyer agent SDKs** — Python and TypeScript client libraries for the MCP buyer flow
 - **OpenRTB 3.0 taxonomy** — align `family_id` scheme with IAB standards
 - **Well-known observability properties** — expose `data_source` / `anchor_store` / `deployment_mode` so a buyer agent can distinguish demo from production programmatically

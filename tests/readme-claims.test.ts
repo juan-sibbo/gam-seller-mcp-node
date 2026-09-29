@@ -59,10 +59,17 @@ describe("README ↔ code parity (C-27 / T-8)", () => {
     expect(sink).toMatch(/"s3"/);
   });
 
-  it("the README does not claim a live GAM connection (forecast is synthetic until wired)", () => {
-    // Guards the other direction: an over-claim that GAM is connected while the adapter is a stub.
+  it("the README's live-GAM claim is scoped to the forecast and backed by code", () => {
+    // The README claims a live GAM forecast (gam.json) and synthetic data without it. Both halves
+    // must be real: only the GAM source declares itself live, and it reads ForecastService.
+    expect(readme).toMatch(/gam\.json/);
     expect(readme.toLowerCase()).toMatch(/synthetic/);
-    const source = readFileSync(join(repoRoot, "src/forecast/source.ts"), "utf-8");
-    expect(source).toMatch(/not implemented/i); // GamForecastSource still throws
+    expect(readme).toMatch(/never saved/);
+    const gam = readFileSync(join(repoRoot, "src/forecast/gam-source.ts"), "utf-8");
+    expect(gam).toMatch(/readonly live = true/);
+    expect(gam).toMatch(/getAvailabilityForecast/);
+    for (const other of ["src/forecast/engine.ts", "src/forecast/seeded-source.ts"]) {
+      expect(readFileSync(join(repoRoot, other), "utf-8")).not.toMatch(/live = true/);
+    }
   });
 });

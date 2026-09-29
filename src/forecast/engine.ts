@@ -1,6 +1,6 @@
 // Synthetic forecast engine — s5-forecast-demo-mode-authorization-2026-07-04.md
 // Produces Low/Mid/High availability buckets from config, zero GAM.
-// synthetic: true is ALWAYS set — this field must never be false until a production gate.
+// synthetic: true for every source that is not a live ad-server read (see ForecastSource.live).
 // Z3 invariant: response contains no user-level attributes (audience, segment, TC String).
 // Rate limit: N=1/T=30s per buyer_id applied in server.ts (same class as discover_products).
 
@@ -31,7 +31,7 @@ export interface ForecastResult {
   bucket: ForecastBucket;
   bucket_label: string;
   ttl_seconds: number;
-  synthetic: true; // always true in demo mode — see authorization doc
+  synthetic: boolean; // false only when the source is a live GAM read (GamForecastSource)
   consent_context: null;        // Pilar 3 reserved field
   legal_basis_provenance: null; // Pilar 3 reserved field
 }
@@ -56,11 +56,9 @@ export class SyntheticForecastSource implements ForecastSource {
 
 export class ForecastEngine {
   // Source-agnostic. Defaults to the synthetic source so existing callers and the demo keep
-  // working unchanged. A production (GAM) source is injected only behind a future gate + a
-  // provisioned service account (CURRENT_STATE §"Still Prohibited": no GAM connection in v1);
-  // the GamForecastSource stub throws, so the synthetic: true invariant below stays honest —
-  // no real source can currently produce a result. Flipping synthetic → false is a future
-  // production-gate act, out of scope here.
+  // working unchanged. `synthetic` is derived from the source's own `live` declaration: only
+  // GamForecastSource (a live ForecastService snapshot) sets it, so synthetic and seeded data stay
+  // labeled synthetic: true.
   constructor(private readonly source: ForecastSource = new SyntheticForecastSource()) {}
 
   async forecast(family_id: string, period: string): Promise<ForecastResult> {
@@ -71,7 +69,7 @@ export class ForecastEngine {
       bucket,
       bucket_label: BUCKET_LABELS[bucket],
       ttl_seconds: FORECAST_TTL_SECONDS,
-      synthetic: true,
+      synthetic: this.source.live !== true,
       consent_context: null,
       legal_basis_provenance: null,
     };

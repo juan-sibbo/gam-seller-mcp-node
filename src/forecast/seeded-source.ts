@@ -57,7 +57,7 @@ function seedKey(family_id: string, period: string): string {
   return JSON.stringify([family_id, period]);
 }
 
-function bucketForImpressions(avails: number, t: ForecastThresholds): ForecastBucket {
+export function bucketForImpressions(avails: number, t: ForecastThresholds): ForecastBucket {
   if (avails >= t.high) return FORECAST_BUCKET.HIGH;
   if (avails >= t.mid) return FORECAST_BUCKET.MID;
   return FORECAST_BUCKET.LOW;
@@ -153,7 +153,7 @@ export class SeededForecastSource implements ForecastSource {
   }
 }
 
-function validateThresholds(t: ForecastThresholds): void {
+export function validateThresholds(t: ForecastThresholds): void {
   if (
     typeof t.mid !== "number" ||
     typeof t.high !== "number" ||

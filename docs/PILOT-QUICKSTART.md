@@ -87,9 +87,8 @@ The prototype is off the test track — the only remaining inputs are yours:
    (`catalog.json` / `pricing.json` / `entitlements.json`), and your DSR contact (`deployment.json`).
 2. **A host** — a VM/server (or CDN/edge in front of one) with a domain and ports 80/443, per
    [`deploy/`](../deploy/README.md).
-3. **The GAM last mile** — a **service account with the ForecastService scope** to replace the
-   seeded/synthetic forecast with live avails (issue #4, DP-AB-01 §5.2). The `GamForecastSource`
-   seam already exists; provisioning the credential flips it from seeded-synthetic to live with no
-   other code change. Until then the node is honest by construction (`synthetic: true`, and no
-   ad-server write path exists). See
+3. **The GAM last mile** — a **service account added to your GAM network** with a read role that
+   can run forecasts, plus a `gam.json` mapping each family to its GAM targeting. The node then
+   serves live avails (`synthetic: false`) from a ForecastService snapshot; without it the node is
+   honest by construction (`synthetic: true`, and no ad-server write path exists). See
    [PUBLISHER-DEPLOYMENT.md → The last mile](PUBLISHER-DEPLOYMENT.md#the-last-mile--live-gam).
