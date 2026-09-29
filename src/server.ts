@@ -214,7 +214,7 @@ function buildServer(deps: ServerDeps): McpServer {
   // authenticated surface cannot be registered WITHOUT it (there is no raw server.tool path for
   // authed tools), so the README's "adding a new tool cannot bypass this" holds by construction,
   // not convention (#67 / C-02). The rate limiter stays per-surface: each tool passes its own
-  // instance (or none — e.g. revoke_intent), so this refactor preserves current behavior exactly.
+  // instance (every authenticated tool has one since #80, revoke_intent included).
   // Only `well_known_capabilities` (public trust anchor) is registered raw, by design.
   function guardedTool<Args>(
     name: string,

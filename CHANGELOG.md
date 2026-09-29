@@ -27,6 +27,18 @@ MCP tools; the audience-blind, egress-deny-all, no-ad-server-writes posture is u
   never delays or fails the buyer's commit (the ledger is the record of record); failures surface
   on `mcp_intent_handoff_total{outcome="failed"}` and stderr, never swallowed.
 
+### Documentation drift corrected
+
+- **`docs/ARCHITECTURE.md` re-synced with the code.** It still described three tools, an optional
+  token ("if a token is present"), code-fixture entitlements and a single anchor file. It now
+  covers the five tools behind the shared `guardedTool` gate, token-mandatory identity
+  (`token.sub`), `entitlements.json`, synthetic/seeded forecast sources, the intent store and
+  handoff sink, the selectable anchor sinks, and which work runs in background cycles rather than
+  in the buyer request path.
+- **"Read-only" wording retired.** Since v0.5 the node has one write — the buyer's own soft
+  commitment — so the package/registry description and the design principle now say what is
+  actually true: no ad-server writes.
+
 ## [0.1.0] — 2026-07-22
 
 First tagged release. Everything below was developed iteratively and is now stable enough
