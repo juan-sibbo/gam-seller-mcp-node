@@ -1,6 +1,38 @@
 # Changelog
 
-## [Unreleased] — real-inventory pilot enablement
+## [0.9.0] — 2026-09-29 — disclosure gate, idempotency by default, real-inventory pilot enablement
+
+### ⚠️ Breaking: idempotency key required by default
+
+- **`client_request_id` is now required on every authenticated call** (SEC-GATE-3, #82). Until
+  now it was optional unless the operator set `MCP_REQUIRE_IDEMPOTENCY_KEY=1`, so the default
+  deployment let a request bypass replay detection simply by omitting the key. The gate is now
+  on by default; a call without the key gets the generic `INVALID_REQUEST`. Operators with legacy
+  clients can explicitly opt out with `MCP_REQUIRE_IDEMPOTENCY_KEY=0|false|no|off`.
+- **Example buyer client** (`examples/buyer-client-ts`) now sends a fresh UUID per call when the
+  caller supplies none, so it works against the new default unchanged. The buyer guide examples
+  carry the key on every call.
+
+### Disclosure gate — what a tool may return
+
+- **The surface denylist was a label check, not a payload check.** Each tool declares an allowed
+  surface label when it is registered; the policy engine denies denylisted labels, but never looked
+  at what the handler returned. A tool registered under an allowed label could therefore return
+  internal fields (GAM ids, floors, deal refs) — only per-handler projection stopped that. The
+  README and design principles claimed "adding a new tool cannot bypass this", which overstated it.
+  Flagged by an external review; confirmed in code.
+- **Now structural.** `guardedTool` requires a strict disclosure schema per tool
+  (`src/policy/disclosure.ts`) and validates every response before it leaves the node (errors
+  against the safe error envelope). Any undeclared field, at any depth, withholds the response and
+  returns a generic `INTERNAL_ERROR`; the operator sees `mcp_disclosure_rejected_total{tool}` and a
+  stderr line naming the tool (never the payload). A new authenticated tool cannot be registered
+  without a schema. Pinned by `tests/disclosure-gate.test.ts`, including a forecast engine that
+  leaks a field through `get_forecast`'s result spread.
+- README, `docs/DESIGN-PRINCIPLES.md` and `docs/ARCHITECTURE.md` now describe the two gates
+  separately: the denylist decides who may call a tool; the disclosure gate decides what it may
+  return.
+
+### Real-inventory pilot enablement
 
 Two config-driven seams that let a pilot run on a publisher's real inventory shape **without** a
 live GAM connection (the ForecastService adapter stays a stub pending a service account). No new
@@ -579,6 +611,7 @@ persistence path. Contract stays `0.2.0`.
   non-atomically. Pinned by a test that blocks the temp path and asserts the committed file
   survives.
 
+[0.9.0]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.9.0
 [0.8.13]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.13
 [0.8.12]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.12
 [0.8.11]: https://github.com/juan-sibbo/gam-seller-mcp-node/releases/tag/v0.8.11
