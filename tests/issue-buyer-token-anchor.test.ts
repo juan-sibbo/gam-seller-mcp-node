@@ -17,7 +17,7 @@ describe("issue-buyer-token anchoring (regression #73)", () => {
     const ledger = createMemoryLedger();
     recordTokenIssuance(ledger, claims);
     const anchor = createMemoryAnchor(); // empty — as if the CLI never anchored
-    const result = verifyAfterRestore(ledger.headHash(), () => ledger.replayVerify(), anchor);
+    const result = verifyAfterRestore(ledger.headHash(), () => ledger.replayVerify(), anchor, (seq) => ledger.hashAt(seq));
     expect(result.valid).toBe(false);
     expect(result.error).toBe("no_anchor_but_non_empty_ledger");
   });
@@ -27,7 +27,7 @@ describe("issue-buyer-token anchoring (regression #73)", () => {
     recordTokenIssuance(ledger, claims);
     const anchor = createMemoryAnchor();
     anchor.anchor(ledger.headHash(), ledger.headSeq()); // exactly what the CLI now does
-    const result = verifyAfterRestore(ledger.headHash(), () => ledger.replayVerify(), anchor);
+    const result = verifyAfterRestore(ledger.headHash(), () => ledger.replayVerify(), anchor, (seq) => ledger.hashAt(seq));
     expect(result.valid).toBe(true);
     expect(result.headHashMatch).toBe(true);
   });

@@ -113,7 +113,7 @@ describe("Post-restore verification — head-hash-first then full replay (decisi
   it("verifies a fresh ledger with no anchor (empty = valid)", () => {
     const ledger = createMemoryLedger();
     const anchor = createMemoryAnchor();
-    const result = verifyAfterRestore(ledger.headHash(), () => ledger.replayVerify(), anchor);
+    const result = verifyAfterRestore(ledger.headHash(), () => ledger.replayVerify(), anchor, (seq) => ledger.hashAt(seq));
     expect(result.valid).toBe(true);
     expect(result.headHashMatch).toBe(true);
   });
@@ -129,25 +129,26 @@ describe("Post-restore verification — head-hash-first then full replay (decisi
     anchor.anchor(ledger.headHash(), ledger.size() - 1);
 
     // Simulate restore: same ledger (not tampered)
-    const result = verifyAfterRestore(ledger.headHash(), () => ledger.replayVerify(), anchor);
+    const result = verifyAfterRestore(ledger.headHash(), () => ledger.replayVerify(), anchor, (seq) => ledger.hashAt(seq));
     expect(result.valid).toBe(true);
     expect(result.headHashMatch).toBe(true);
     expect(result.replayResult?.valid).toBe(true);
   });
 
-  it("fails head-hash-first check when ledger is tampered after anchoring", () => {
+  it("accepts entries appended after the anchor as the unanchored tail (restart after traffic)", () => {
     const ledger = createMemoryLedger();
     const anchor = createMemoryAnchor();
 
     ledger.append(EventClass.BUYER_AUTHENTICATION, {});
     anchor.anchor(ledger.headHash(), 0);
 
-    // Tamper: add an entry AFTER anchoring without re-anchoring
+    // Normal operation between anchoring cycles — not tampering. Rewrites of the anchored prefix
+    // and truncation below the anchor are rejected (tests/restart-after-traffic.test.ts).
     ledger.append(EventClass.SCOPE_RESOLUTION, {});
 
-    const result = verifyAfterRestore(ledger.headHash(), () => ledger.replayVerify(), anchor);
-    expect(result.headHashMatch).toBe(false);
-    expect(result.valid).toBe(false);
+    const result = verifyAfterRestore(ledger.headHash(), () => ledger.replayVerify(), anchor, (seq) => ledger.hashAt(seq));
+    expect(result.headHashMatch).toBe(true);
+    expect(result.valid).toBe(true);
   });
 
   it("anchoring event is logged and anchor record is appended", () => {
@@ -182,7 +183,7 @@ describe("Post-restore verification — head-hash-first then full replay (decisi
     ledger.append(EventClass.BUYER_AUTHENTICATION, {});
     anchor.anchor(ledger.headHash(), 0);
 
-    verifyAfterRestore(ledger.headHash(), () => ledger.replayVerify(), anchor);
+    verifyAfterRestore(ledger.headHash(), () => ledger.replayVerify(), anchor, (seq) => ledger.hashAt(seq));
 
     const restoreEntry = ledger.append(EventClass.RESTORE, {
       head_hash_match: true,

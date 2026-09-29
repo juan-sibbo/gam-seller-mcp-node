@@ -737,7 +737,7 @@ async function main() {
   // Fail-closed: a head-hash mismatch or replay failure means the on-disk ledger is
   // suspect — refuse to start rather than serve with an untrustworthy audit trail.
   // First-run case (empty ledger, no anchor) is valid; verifyAfterRestore handles it.
-  const verifyResult = verifyAfterRestore(ledger.headHash(), () => ledger.replayVerify(), anchor);
+  const verifyResult = verifyAfterRestore(ledger.headHash(), () => ledger.replayVerify(), anchor, (seq) => ledger.hashAt(seq));
   if (!verifyResult.valid) {
     throw new Error(
       `[audit] FATAL: ledger integrity check failed on startup (${verifyResult.error}) — ` +

@@ -25,7 +25,8 @@ describe("revoke-token anchor regression", () => {
     const result = verifyAfterRestore(
       ledger.headHash(),
       () => ledger.verifyAll(),
-      anchor
+      anchor,
+      (seq) => ledger.hashAt(seq)
     );
     
     expect(result.valid).toBe(false);
@@ -51,7 +52,8 @@ describe("revoke-token anchor regression", () => {
     const result = verifyAfterRestore(
       ledger.headHash(),
       () => ledger.replayVerify(),
-      anchor
+      anchor,
+      (seq) => ledger.hashAt(seq)
     );
     
     expect(result.valid).toBe(true);
@@ -80,7 +82,8 @@ describe("revoke-token anchor regression", () => {
     const result = verifyAfterRestore(
       ledger.headHash(),
       () => ledger.replayVerify(),
-      anchor
+      anchor,
+      (seq) => ledger.hashAt(seq)
     );
     
     expect(result.valid).toBe(true);
