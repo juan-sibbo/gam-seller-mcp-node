@@ -233,7 +233,7 @@ describe("SEC-GATE-2 — auth matrix (g4-phase1 §11)", () => {
 // SEC-GATE-3 subset — three pillars
 // g4-phase1-readonly-authorization.md §11
 // ─────────────────────────────────────────────
-describe("SEC-GATE-3 subset — envelope + replay + SSRF egress deny-all", () => {
+describe("SEC-GATE-3 subset — envelope + replay + SSRF (buyer params never become URLs)", () => {
   // Pilar 1: Error envelope — no stack/env/secrets/GAM IDs (S1+S3 cross-reference)
   describe("Pilar 1 — error envelope safe serialization (cross-reference S1/S3)", () => {
     it("RATE_LIMITED envelope contains no internal fields", () => {
@@ -270,9 +270,10 @@ describe("SEC-GATE-3 subset — envelope + replay + SSRF egress deny-all", () =>
     });
   });
 
-  // Pilar 3: SSRF/egress deny-all — static analysis (NEW in S4)
-  // No fetch/got/axios in src/. Buyer params not used as URLs.
-  describe("Pilar 3 — SSRF/egress deny-all (static grep, SEC-GATE-3 new)", () => {
+  // Pilar 3: SSRF — buyer params never become URL components.
+  // The network egress surface itself (which modules may make outbound calls, and that the buyer
+  // cannot steer a destination) is pinned in tests/egress-surface.test.ts.
+  describe("Pilar 3 — SSRF: buyer params not used as URLs (SEC-GATE-3)", () => {
     const srcDir = join(fileURLToPath(import.meta.url), "../../src");
 
     function collectTsFiles(dir: string): string[] {
@@ -289,56 +290,6 @@ describe("SEC-GATE-3 subset — envelope + replay + SSRF egress deny-all", () =>
       return files;
     }
 
-    it("no fetch() calls in src/ (SSRF deny-all)", () => {
-      const files = collectTsFiles(srcDir);
-      expect(files.length).toBeGreaterThan(0);
-      const violations: string[] = [];
-      for (const file of files) {
-        const content = readFileSync(file, "utf-8");
-        // Match fetch( but not comments
-        if (/(?<!\/\/.*)\bfetch\s*\(/.test(content)) {
-          violations.push(file);
-        }
-      }
-      expect(violations).toHaveLength(0);
-    });
-
-    it("no got() / got.get() / got.post() calls in src/", () => {
-      const files = collectTsFiles(srcDir);
-      const violations: string[] = [];
-      for (const file of files) {
-        const content = readFileSync(file, "utf-8");
-        if (/\bgot\s*[\.(]/.test(content)) {
-          violations.push(file);
-        }
-      }
-      expect(violations).toHaveLength(0);
-    });
-
-    it("no axios calls in src/", () => {
-      const files = collectTsFiles(srcDir);
-      const violations: string[] = [];
-      for (const file of files) {
-        const content = readFileSync(file, "utf-8");
-        if (/\baxios\s*[\.(]/.test(content)) {
-          violations.push(file);
-        }
-      }
-      expect(violations).toHaveLength(0);
-    });
-
-    it("no http.request / https.request calls in src/", () => {
-      const files = collectTsFiles(srcDir);
-      const violations: string[] = [];
-      for (const file of files) {
-        const content = readFileSync(file, "utf-8");
-        if (/\bhttps?\.request\s*\(/.test(content)) {
-          violations.push(file);
-        }
-      }
-      expect(violations).toHaveLength(0);
-    });
-
     it("buyer_id is not used as a URL component in src/", () => {
       const files = collectTsFiles(srcDir);
       // Check that buyer_id does not appear adjacent to URL-building patterns
@@ -347,18 +298,6 @@ describe("SEC-GATE-3 subset — envelope + replay + SSRF egress deny-all", () =>
         const content = readFileSync(file, "utf-8");
         // Detect patterns like: `https://${buyer_id}` or `http://` + buyer_id
         if (/https?:\/\/.*buyer_id/.test(content) || /buyer_id.*https?:\/\//.test(content)) {
-          violations.push(file);
-        }
-      }
-      expect(violations).toHaveLength(0);
-    });
-
-    it("no node-fetch or cross-fetch imports in src/", () => {
-      const files = collectTsFiles(srcDir);
-      const violations: string[] = [];
-      for (const file of files) {
-        const content = readFileSync(file, "utf-8");
-        if (/from\s+['"](?:node-fetch|cross-fetch|undici|got|axios|superagent)['"]/.test(content)) {
           violations.push(file);
         }
       }

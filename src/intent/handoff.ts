@@ -11,9 +11,9 @@ import { DurabilityHealth } from "../durability.js";
 //
 // DELIVERY IS LOCAL-FIRST, BY DESIGN. The node writes the handoff to a local file drop; forwarding
 // it onward (webhook, CRM, email) is an OPERATOR-OWNED process reading that drop — never an outbound
-// call from the node itself. This preserves the SSRF/egress deny-all posture the node is audited
-// for (tests/catalog.test.ts "no fetch/got/axios in src/"): the node makes no network egress on
-// behalf of a request, and no buyer-supplied value is ever used as a URL. It is also the more
+// call from the node itself. This keeps the buyer request path free of network egress (the
+// declared egress surface — only the operator-opted audit anchors — is pinned in
+// tests/egress-surface.test.ts), and no buyer-supplied value is ever used as a URL. It is also the more
 // publisher-sovereign design — the publisher owns the forwarding, not the node.
 //
 // Recipient is the publisher's OWN first-party sales system, so the file-drop payload MAY carry the
@@ -56,7 +56,7 @@ export class NullHandoffSink implements HandoffSink {
 }
 
 // Append one JSON object per line to a local file the publisher's sales ops tails, imports, or
-// forwards. Local write only — no network egress (SSRF deny-all).
+// forwards. Local write only — no network egress on the request path.
 export class FileHandoffSink implements HandoffSink {
   readonly kind = "file";
   private readonly durability = new DurabilityHealth("intent-handoff", "intent handoff file");
@@ -98,8 +98,8 @@ export function resolveHandoffSink(env: NodeJS.ProcessEnv = process.env): Handof
   }
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
     throw new Error(
-      `[handoff] ${INTENT_HANDOFF_ENV}="${redact(raw)}": the node makes no outbound calls ` +
-        `(SSRF/egress deny-all). Use "file" and point your own webhook/CRM forwarder at the ` +
+      `[handoff] ${INTENT_HANDOFF_ENV}="${redact(raw)}": the handoff makes no outbound call ` +
+        `(no network egress on the buyer request path). Use "file" and point your own webhook/CRM forwarder at the ` +
         `file drop (${DEFAULT_HANDOFF_FILE}).`
     );
   }

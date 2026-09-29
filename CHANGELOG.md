@@ -4,7 +4,7 @@
 
 Two config-driven seams that let a pilot run on a publisher's real inventory shape **without** a
 live GAM connection (the ForecastService adapter stays a stub pending a service account). No new
-MCP tools; the audience-blind, egress-deny-all, no-ad-server-writes posture is unchanged.
+MCP tools; the audience-blind, no-egress-on-the-request-path, no-ad-server-writes posture is unchanged.
 
 ### Seeded forecast source
 
@@ -22,10 +22,25 @@ MCP tools; the audience-blind, egress-deny-all, no-ad-server-writes posture is u
 - **`MCP_INTENT_HANDOFF=file` (opt-in).** Closes the loop: a committed intent is delivered to the
   publisher's classic sales rails as a JSONL drop (`FileHandoffSink`), which an operator-owned
   forwarder tails. Default is `NullHandoffSink` (no delivery; `create_intent` unchanged).
-- **Egress deny-all preserved.** The node makes no outbound calls — a URL value is refused with a
-  pointer to the file drop. Delivery is fire-and-forget off the request path: a slow/failing sink
+- **No egress on the request path.** The handoff makes no outbound call — a URL value is refused
+  with a pointer to the file drop. Delivery is fire-and-forget off the request path: a slow/failing sink
   never delays or fails the buyer's commit (the ledger is the record of record); failures surface
   on `mcp_intent_handoff_total{outcome="failed"}` and stderr, never swallowed.
+
+### Egress claims aligned with the external audit anchors
+
+- **Public contract corrected.** The README and deployment guide claimed the node makes "no
+  outbound calls (SSRF/egress deny-all)", while the TSA (#94) and S3 (#95) anchor backends make
+  operator-configured outbound connections. The contract now reads: buyer request handling makes
+  no outbound network calls; the only egress is the operator-opted audit anchor, outside the
+  request path. Disclosure (what may appear in buyer responses) and network egress (which external
+  systems the process may reach) are now named separately.
+- **Honest guardrail.** The static grep for the text `fetch(` passed while the TSA backend POSTed
+  through an injected fetch reference. It is replaced by `tests/egress-surface.test.ts`: network
+  capabilities (global fetch, network modules, non-literal dynamic imports) may live only in the
+  declared modules; anchor backends are reachable only via the operator-config resolver, never
+  from `buildServer`; no buyer-facing tool accepts a destination-like argument. A new outbound
+  capability fails CI until it is declared on purpose.
 
 ### Documentation drift corrected
 

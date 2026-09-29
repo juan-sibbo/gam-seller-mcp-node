@@ -69,7 +69,7 @@ describe("HandoffSink implementations", () => {
   });
 });
 
-// ── resolveHandoffSink (env-selected, fail-closed, egress deny-all) ──────────────────────────
+// ── resolveHandoffSink (env-selected, fail-closed, no outbound call) ──────────────────────────
 describe("resolveHandoffSink", () => {
   it("returns NullHandoffSink when MCP_INTENT_HANDOFF is unset", () => {
     expect(resolveHandoffSink({} as NodeJS.ProcessEnv)).toBeInstanceOf(NullHandoffSink);
@@ -83,7 +83,7 @@ describe("resolveHandoffSink", () => {
     expect(sink).toBeInstanceOf(FileHandoffSink);
   });
 
-  it("throws (egress deny-all) on an http(s):// URL — the node makes no outbound calls", () => {
+  it("throws on an http(s):// URL — the handoff makes no outbound call", () => {
     expect(() =>
       resolveHandoffSink({ MCP_INTENT_HANDOFF: "https://sales.example/handoff" } as unknown as NodeJS.ProcessEnv)
     ).toThrow(/outbound|egress/i);
