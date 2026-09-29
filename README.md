@@ -192,12 +192,23 @@ see [`docs/PUBLISHER-DEPLOYMENT.md`](docs/PUBLISHER-DEPLOYMENT.md):
   Buckets become realistic while every result stays `synthetic: true` — pre-loaded is not a live
   read, so no live-GAM claim is made.
 - **Close the handoff loop** so a committed intent reaches the publisher's sales rails, via
-  `MCP_INTENT_HANDOFF=file` (a local JSONL drop an operator forwarder tails). The node makes **no
-  outbound calls** (SSRF/egress deny-all) — a handoff record is a notification, never a GAM order
-  or inventory hold.
+  `MCP_INTENT_HANDOFF=file` (a local JSONL drop an operator forwarder tails). The handoff makes
+  **no outbound call** — forwarding is the operator's process, and a URL value is refused. A
+  handoff record is a notification, never a GAM order or inventory hold.
 - **Harden for the road**: `MCP_REQUIRE_OPERATOR_CONFIG=1` (refuse to boot on demo config),
   `MCP_REQUIRE_IDEMPOTENCY_KEY=1` (close the replay-bypass), `MCP_ANCHOR_SINK=tsa` (anchor the
   audit trail to a third party).
+
+**Network egress — declared and bounded, not deny-all.** Buyer request handling makes no outbound
+network calls. Optional audit anchoring can generate operator-configured egress outside the buyer
+request path (at boot and on the periodic anchor cycle): the TSA backend (`MCP_ANCHOR_SINK=tsa`)
+submits the ledger head hash to the configured RFC 3161 authority; the S3 backend
+(`MCP_ANCHOR_SINK=s3`) writes the anchor record to the configured Object Lock bucket; a custom
+sink module (`MCP_ANCHOR_SINK=<module>`) runs operator-supplied code. The default local anchor
+backend performs no external network call. Destinations come only from operator configuration —
+no buyer input can choose one. This surface is pinned by
+[`tests/egress-surface.test.ts`](tests/egress-surface.test.ts): a new outbound capability fails CI
+until it is declared on purpose.
 
 ## Why not just use the GAM API directly?
 
@@ -292,7 +303,7 @@ existing design decisions:
 |---------------------|-----------|
 | Protection by design and by default | Default-Deny: every surface denied unless an explicit entitlement grants access |
 | Record and document agent actions | Append-only hash-chained audit ledger; every allow/deny recorded before the response is sent |
-| Control what leaves toward third parties, and with what traceability | Structural egress allowlist (SEC-GATE-*); exact pricing, deal IDs and raw availability permanently blocked |
+| Control what leaves toward third parties, and with what traceability | Buyer-facing disclosure allowlist (SEC-GATE-*): exact pricing, deal IDs and raw availability are permanently blocked from responses. Network egress allowlist: the only outbound connections are the operator-opted audit anchors (see *Network egress* above), pinned by CI |
 | Govern agent memory with purpose and retention rules | DSR toolkit (Arts. 15/17/18/20); configurable retention window enforced on the audit ledger |
 
 This alignment is declared machine-readably in the signed well-known document
