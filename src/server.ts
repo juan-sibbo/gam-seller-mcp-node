@@ -415,13 +415,12 @@ function buildServer(deps: ServerDeps): McpServer {
 
   // Availability check — "can you deliver N impressions of this family in this period?"
   // Answers available / partial (up to X) / unavailable. X is the publisher's commercial
-  // availability: the forecast estimate after the disclosure policy (haircut + ladder step), never
-  // the raw forecast. The decision uses only that quantized value, so repeated questions reveal
-  // nothing beyond the ladder step (disclosure-policy.ts). Served from the forecast source's
-  // snapshot — no outbound call on the request path. Z3: inventory-level data only.
+  // availability: the forecast estimate rounded down by the disclosure policy (default 2
+  // significant figures; disclosure-policy.ts). Served from the forecast source's snapshot — no
+  // outbound call on the request path. Z3: inventory-level data only.
   guardedTool<{ family_id: string; period: string; impressions: number; token?: string; client_request_id?: string }>(
     "check_availability",
-    "Check whether the publisher can deliver a number of impressions of a product family in a period. Returns available, partial (with the volume it can offer) or unavailable. Figures are forecast estimates rounded by the publisher's disclosure policy, not reservations.",
+    "Check whether the publisher can deliver a number of impressions of a product family in a period. Returns available, partial (with the volume it can offer) or unavailable. Figures are forecast estimates, rounded down (2 significant figures by default), not reservations.",
     {
       family_id: z.string().describe("Product family ID from discover_products"),
       period: z.string().describe("Target period (e.g. 2026-10, Q4-2026)"),

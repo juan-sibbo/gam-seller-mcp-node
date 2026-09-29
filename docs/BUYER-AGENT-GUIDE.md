@@ -177,7 +177,7 @@ Ask whether the publisher can deliver a volume: `family_id`, `period` and `impre
   "period": "2026-10",
   "requested_impressions": 2800000,
   "status": "partial",
-  "deliverable_up_to": 2000000,
+  "deliverable_up_to": 2700000,
   "as_of": "2026-10-03T10:30:00.000Z",
   "valid_for_seconds": 1800,
   "synthetic": false,
@@ -186,12 +186,11 @@ Ask whether the publisher can deliver a volume: `family_id`, `period` and `impre
 ```
 
 `status` is `available` (your volume fits), `partial` (the publisher can offer up to
-`deliverable_up_to`) or `unavailable`. `deliverable_up_to` is the publisher's **commercial
-availability**: its forecast for this product and period, rounded down to a step of its disclosure
-policy (for example 1, 2, 5, 10, 20, 50… thousand). It is an estimate under the product's forecast
-conditions, not a reservation — to commit, use `create_intent`. Asking again with different volumes
-does not reveal more than that step. `as_of` is when the forecast was taken; `synthetic` works as in
-`get_forecast`.
+`deliverable_up_to`) or `unavailable`. `deliverable_up_to` is the publisher's forecast for this
+product and period, rounded down to 2 significant figures by default (2,784,312 → 2,700,000) —
+a forecast has no unit-level precision. It is an estimate under the product's forecast conditions,
+not a reservation; to commit, use `create_intent`. `as_of` is when the forecast was taken;
+`synthetic` works as in `get_forecast`.
 
 ### `create_intent`
 

@@ -6,14 +6,12 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
   DEFAULT_DISCLOSURE_POLICY,
-  isDisclosableQuantity,
   loadDisclosurePolicyFromFile,
   parseDisclosurePolicy,
   quantizeAvailability,
   type DisclosurePolicy,
 } from "../src/forecast/disclosure-policy.js";
 import {
-  AVAILABILITY_STATUS,
   ForecastEngine,
   SyntheticForecastSource,
   decideAvailability,
@@ -39,7 +37,7 @@ import { createMemoryLedger } from "../src/audit/ledger.js";
 import { ReplayGuard } from "../src/audit/replay.js";
 
 // check_availability — "can you deliver N impressions?" answered from the publisher's commercial
-// availability (forecast estimate → disclosure policy), never from the raw forecast.
+// availability: the forecast estimate rounded down by its disclosure policy.
 
 // Deterministic PRNG so the property tests are reproducible.
 function mulberry32(seed: number): () => number {
@@ -66,62 +64,59 @@ const fixedSource = (units: number, live = true): ForecastSource => ({
   },
 });
 
-describe("disclosure policy — quantization", () => {
-  it("floors to the ladder step (1-2-5 by default)", () => {
+describe("disclosure policy — rounding", () => {
+  it("rounds down to 2 significant figures by default", () => {
     const q = (n: number) => quantizeAvailability(n, DEFAULT_DISCLOSURE_POLICY);
-    expect(q(2_780_000)).toBe(2_000_000);
-    expect(q(9_999_999)).toBe(5_000_000);
-    expect(q(10_000_000)).toBe(10_000_000); // exact powers of ten stay exact
-    expect(q(1_999)).toBe(1_000);
-    expect(q(5_956)).toBe(5_000);
+    expect(q(2_784_312)).toBe(2_700_000);
+    expect(q(2_784)).toBe(2_700);
+    expect(q(5_956)).toBe(5_900);
+    expect(q(9_999_999)).toBe(9_900_000);
+    expect(q(10_000_000)).toBe(10_000_000);
+    expect(q(87)).toBe(87);
+    expect(q(7)).toBe(7);
   });
 
-  it("hides the long tail below min_quantity and never goes negative", () => {
-    const q = (n: number) => quantizeAvailability(n, DEFAULT_DISCLOSURE_POLICY);
-    expect(q(999)).toBe(0);
-    expect(q(0)).toBe(0);
-    expect(q(-5)).toBe(0);
-    expect(q(Number.NaN)).toBe(0);
-  });
-
-  it("applies the haircut before rounding, and honours custom ladders", () => {
-    expect(quantizeAvailability(2_600_000, { ...DEFAULT_DISCLOSURE_POLICY, haircut: 0.8 })).toBe(2_000_000);
-    expect(quantizeAvailability(2_600_000, { ...DEFAULT_DISCLOSURE_POLICY, ladder: [1, 2.5, 5] })).toBe(2_500_000);
-    expect(quantizeAvailability(2_600_000, { ...DEFAULT_DISCLOSURE_POLICY, ladder: [1] })).toBe(1_000_000);
-  });
-
-  it("only ever produces disclosable quantities, never above the offered estimate", () => {
+  it("never offers more than the estimate, and never goes negative", () => {
     const rand = mulberry32(7);
-    const policies: DisclosurePolicy[] = [
-      DEFAULT_DISCLOSURE_POLICY,
-      { ladder: [1, 2.5, 5], haircut: 0.8, minQuantity: 10_000 },
-      { ladder: [1, 1.5, 2, 3, 5, 7], haircut: 0.95, minQuantity: 0 },
-    ];
     for (let i = 0; i < 5_000; i++) {
-      const policy = policies[i % policies.length]!;
       const estimate = randomEstimate(rand);
-      const commercial = quantizeAvailability(estimate, policy);
-      expect(isDisclosableQuantity(commercial, policy)).toBe(true);
-      expect(commercial).toBeLessThanOrEqual(estimate * policy.haircut);
+      const offered = quantizeAvailability(estimate, DEFAULT_DISCLOSURE_POLICY);
+      expect(offered).toBeLessThanOrEqual(estimate);
+      // Within the precision of 2 significant figures: never below 90% of the estimate.
+      if (estimate >= 10) expect(offered).toBeGreaterThanOrEqual(estimate * 0.9);
     }
+    expect(quantizeAvailability(0, DEFAULT_DISCLOSURE_POLICY)).toBe(0);
+    expect(quantizeAvailability(-5, DEFAULT_DISCLOSURE_POLICY)).toBe(0);
+    expect(quantizeAvailability(Number.NaN, DEFAULT_DISCLOSURE_POLICY)).toBe(0);
+  });
+
+  it("honours the publisher's options: precision, haircut, minimum and an optional ladder", () => {
+    const with_ = (p: Partial<DisclosurePolicy>) => ({ ...DEFAULT_DISCLOSURE_POLICY, ...p });
+    expect(quantizeAvailability(2_784_312, with_({ significantFigures: 3 }))).toBe(2_780_000);
+    expect(quantizeAvailability(2_600_000, with_({ haircut: 0.8 }))).toBe(2_000_000);
+    expect(quantizeAvailability(999, with_({ minQuantity: 1000 }))).toBe(0);
+    expect(quantizeAvailability(2_784_312, with_({ ladder: [1, 2, 5] }))).toBe(2_000_000);
+    expect(quantizeAvailability(2_784_312, with_({ ladder: [1, 2.5, 5] }))).toBe(2_500_000);
   });
 
   it("parses the disclosure block fail-closed", () => {
     expect(parseDisclosurePolicy(undefined, "t")).toEqual(DEFAULT_DISCLOSURE_POLICY);
-    expect(parseDisclosurePolicy({ ladder: [1, 2.5, 5], haircut: 0.9, min_quantity: 5000 }, "t")).toEqual({
-      ladder: [1, 2.5, 5],
+    expect(parseDisclosurePolicy({ significant_figures: 3, haircut: 0.9, min_quantity: 5000 }, "t")).toEqual({
+      significantFigures: 3,
       haircut: 0.9,
       minQuantity: 5000,
     });
+    expect(parseDisclosurePolicy({ ladder: [1, 2, 5] }, "t").ladder).toEqual([1, 2, 5]);
     for (const bad of [
+      { significant_figures: 0 },
+      { significant_figures: 2.5 },
+      { ladder: [1, 2], significant_figures: 2 }, // one or the other
       { ladder: [2, 5] }, // must start at 1
       { ladder: [1, 5, 2] }, // ascending
       { ladder: [1, 10] }, // mantissas < 10
-      { ladder: [] },
       { haircut: 0 },
       { haircut: 1.2 },
       { min_quantity: -1 },
-      { min_quantity: 1.5 },
       "coarse",
     ]) {
       expect(() => parseDisclosurePolicy(bad, "t")).toThrow(/disclosure/);
@@ -129,61 +124,33 @@ describe("disclosure policy — quantization", () => {
   });
 });
 
-describe("no-oracle property — questions reveal the ladder step, never the forecast", () => {
-  const policy: DisclosurePolicy = { ladder: [1, 2, 5], haircut: 0.9, minQuantity: 1000 };
-
-  it("the decision is a function of the commercial availability only", async () => {
+describe("status and volume never contradict each other", () => {
+  it("available exactly when the requested volume fits under deliverable_up_to", async () => {
     const rand = mulberry32(42);
     for (let i = 0; i < 300; i++) {
-      const estimate = randomEstimate(rand);
-      const commercial = quantizeAvailability(estimate, policy);
-      // Another estimate that rounds to the same step (the smallest one that does).
-      const twin = commercial === 0 ? 0 : Math.ceil(commercial / policy.haircut);
-      expect(quantizeAvailability(twin, policy)).toBe(commercial);
-
-      const a = new ForecastEngine(fixedSource(estimate), policy);
-      const b = new ForecastEngine(fixedSource(twin), policy);
-      for (let k = 0; k < 20; k++) {
-        const requested = 1 + Math.floor(10 ** (rand() * 9.5));
-        const ra = await a.checkAvailability("f", "2026-10", requested);
-        const rb = await b.checkAvailability("f", "2026-10", requested);
-        expect(ra).toEqual(rb); // indistinguishable to the buyer, whatever it asks
-      }
-    }
-  });
-
-  it("a binary-search prober converges to the ladder step, not the forecast", async () => {
-    const rand = mulberry32(99);
-    for (let i = 0; i < 100; i++) {
-      const estimate = 1000 + randomEstimate(rand);
-      const engine = new ForecastEngine(fixedSource(estimate), policy);
-      // Prober ignores deliverable_up_to and only uses the yes/no signal.
-      let lo = 0;
-      let hi = 2 * estimate + 10;
-      while (hi - lo > 1) {
-        const mid = Math.floor((lo + hi) / 2);
-        const { status } = await engine.checkAvailability("f", "2026-10", mid);
-        if (status === AVAILABILITY_STATUS.AVAILABLE) lo = mid;
-        else hi = mid;
-      }
-      expect(lo).toBe(quantizeAvailability(estimate, policy));
+      const engine = new ForecastEngine(fixedSource(randomEstimate(rand)));
+      const requested = 1 + Math.floor(10 ** (rand() * 9.5));
+      const r = await engine.checkAvailability("f", "2026-10", requested);
+      if (r.deliverable_up_to === 0) expect(r.status).toBe("unavailable");
+      else expect(r.status).toBe(requested <= r.deliverable_up_to ? "available" : "partial");
     }
   });
 });
 
 describe("ForecastEngine.checkAvailability", () => {
   it("answers available / partial / unavailable from the commercial availability", async () => {
-    const engine = new ForecastEngine(fixedSource(2_780_000));
+    const engine = new ForecastEngine(fixedSource(2_784_312));
     expect(await engine.checkAvailability("display-ros", "2026-10", 1_500_000)).toMatchObject({
       status: "available",
-      deliverable_up_to: 2_000_000,
+      deliverable_up_to: 2_700_000,
       requested_impressions: 1_500_000,
     });
-    const partial = await engine.checkAvailability("display-ros", "2026-10", 2_800_000);
-    expect(partial).toMatchObject({ status: "partial", deliverable_up_to: 2_000_000 });
-    expect(JSON.stringify(partial)).not.toContain("2780000");
+    expect(await engine.checkAvailability("display-ros", "2026-10", 2_800_000)).toMatchObject({
+      status: "partial",
+      deliverable_up_to: 2_700_000,
+    });
 
-    const none = await new ForecastEngine(fixedSource(400)).checkAvailability("display-ros", "2026-10", 10);
+    const none = await new ForecastEngine(fixedSource(0)).checkAvailability("display-ros", "2026-10", 10);
     expect(none).toMatchObject({ status: "unavailable", deliverable_up_to: 0 });
   });
 
@@ -221,7 +188,7 @@ describe("ForecastEngine.checkAvailability", () => {
       ],
     });
     const engine = new ForecastEngine(seeded);
-    expect((await engine.checkAvailability("display-ros", "Q4-2026", 30_000_000)).deliverable_up_to).toBe(20_000_000);
+    expect((await engine.checkAvailability("display-ros", "Q4-2026", 30_000_000)).deliverable_up_to).toBe(24_000_000);
     // A literal-bucket seed has no count: the synthetic fallback answers.
     const fallback = await engine.checkAvailability("video-pre-roll", "Q4-2026", 1);
     expect(fallback.synthetic).toBe(true);
@@ -248,7 +215,7 @@ describe("GAM source — availability estimate and product-shaped prospective li
     await source.refresh();
     expect(await source.getAvailability("display-ros", "2026-10")).toEqual({ units: 2_780_000, asOf: NOW });
     const result = await new ForecastEngine(source).checkAvailability("display-ros", "2026-10", 2_800_000);
-    expect(result).toMatchObject({ status: "partial", deliverable_up_to: 2_000_000, synthetic: false });
+    expect(result).toMatchObject({ status: "partial", deliverable_up_to: 2_700_000, synthetic: false });
   });
 
   it("sends the family's priority between lineItemType and costPerUnit", () => {
@@ -325,16 +292,14 @@ describe("check_availability over MCP", () => {
   }
   const body = (res: Awaited<ReturnType<Client["callTool"]>>) => JSON.parse((res.content as Array<{ text: string }>)[0]!.text);
 
-  it("returns the rounded commercial availability and never the raw forecast", async () => {
-    const { call, ledger } = await setup(new ForecastEngine(fixedSource(2_780_000)));
+  it("returns the commercial availability and logs the decision without volumes", async () => {
+    const { call, ledger } = await setup(new ForecastEngine(fixedSource(2_784_312)));
     const res = await call({ family_id: "display-ros", period: "2026-10", impressions: 2_800_000 });
     expect(res.isError).toBeFalsy();
-    expect(body(res)).toMatchObject({ status: "partial", deliverable_up_to: 2_000_000, synthetic: false });
-    expect(JSON.stringify(res)).not.toContain("2780000");
-    // The ledger records the decision, not volumes.
+    expect(body(res)).toMatchObject({ status: "partial", deliverable_up_to: 2_700_000, synthetic: false });
     const entries = JSON.stringify(ledger.allEntries());
     expect(entries).toContain("availability_check");
-    expect(entries).not.toMatch(/2780000|2000000|2800000/);
+    expect(entries).not.toMatch(/2784312|2700000|2800000/);
   });
 
   it("maps source failures to buyer-safe errors", async () => {

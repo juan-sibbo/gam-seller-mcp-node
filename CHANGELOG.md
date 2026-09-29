@@ -8,14 +8,15 @@
   `deliverable_up_to`) or `unavailable`, with `as_of` and `valid_for_seconds`. Served from the same
   forecast source as `get_forecast` (live GAM snapshot, seeded or synthetic); no outbound call on
   the request path. `get_forecast` and its Low/Mid/High buckets stay for compatibility.
-- **Publisher disclosure policy** (`disclosure` block in `gam.json` / `forecast.json`): the forecast
-  estimate is reduced to *commercial availability* — optional haircut, then floored to a step of
-  the publisher's ladder (default 1-2-5), zero below `min_quantity`. Buyers only ever see that
-  value; the raw forecast stays in the process and never reaches responses or the ledger.
-- **No-oracle by construction:** the decision is a pure function of the rounded value, so no
-  sequence of questions reveals more than the ladder step. Pinned by property tests, including a
-  binary-search prober that converges to the step, never to the forecast. The rounding cannot be
-  configured away.
+- **Real volumes.** `deliverable_up_to` is the forecast rounded down to 2 significant figures by
+  default (2,784,312 → 2,700,000): honest about forecast precision, never more than GAM forecasts.
+  Buyers with access get the figure a sales rep would give them; buckets were a minimization choice
+  that treated the entitled buyer as an adversary, and that premise is retired.
+- **Publisher options** (`disclosure` block in `gam.json` / `forecast.json`): `significant_figures`,
+  `haircut` (safety margin), `min_quantity`, or a coarser `ladder` (e.g. 1-2-5) for a publisher that
+  prefers to show less. Fail-closed parsing.
+- **What stays protected:** other buyers' bookings (matched/possible/reserved units are never used),
+  floors, deals and audience data; the ledger records the decision, not volumes.
 - **Product-shaped forecasts:** `gam.json` families accept `priority` (6–10), sent on the
   prospective line item, because GAM availability is conditioned on it.
 

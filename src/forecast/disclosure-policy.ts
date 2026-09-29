@@ -2,49 +2,52 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { operatorConfigDir } from "../config/resolve.js";
 
-// Publisher disclosure policy — turns a forecast estimate into the commercial availability a buyer
-// may see:
+// Publisher disclosure policy — how the forecast estimate is presented to a buyer as commercial
+// availability:
 //
-//     forecast estimate (GAM availableUnits, seeded or synthetic units)   ← never leaves the node
+//     forecast estimate (GAM availableUnits, seeded or synthetic units)
 //            ↓  haircut        (optional safety margin, publisher's choice)
-//            ↓  floor to a step of the publisher's ladder (e.g. 1-2-5: …, 1M, 2M, 5M, 10M, …)
-//            ↓  below min_quantity → 0
-//     commercial availability                                              ← the only number a buyer sees
+//            ↓  round down     (default: 2 significant figures — 2,784,312 → 2,700,000)
+//            ↓  below min_quantity → 0 (optional)
+//     commercial availability  ← what check_availability reports
 //
-// The ladder SIZE is policy. The existence of a ladder is architecture: every buyer-facing answer
-// is computed from the quantized value only, so no sequence of questions ("can you do 2.6M?
-// 2.7M?") reveals more than the step the value falls in. Disabling quantization would turn the
-// availability check into an oracle for the exact forecast — so it cannot be configured away.
+// The default rounding is about honesty, not secrecy: a forecast has no unit-level precision, so
+// reporting 2,784,312 would suggest an accuracy it does not have. Rounding DOWN means the node never
+// offers more than the forecast. A publisher that prefers to show coarser figures can opt into a
+// ladder of steps (e.g. 1-2-5) — a commercial choice, not a system constraint.
 
 export interface DisclosurePolicy {
-  // Mantissas per decade, ascending, each in [1, 10), always including 1. [1, 2, 5] → 1k 2k 5k 10k…
-  ladder: number[];
+  // Significant figures kept when rounding down (ignored when `ladder` is set).
+  significantFigures: number;
+  // Optional coarser presentation: mantissas per decade, ascending, in [1, 10), starting at 1.
+  // [1, 2, 5] → 1k 2k 5k 10k…
+  ladder?: number[];
   // Fraction of the estimate offered, (0, 1]. 1 = no safety margin.
   haircut: number;
-  // Below this (after haircut) the answer is 0 / unavailable. Hides the long tail of tiny avails.
+  // Below this (after haircut) the answer is 0 / unavailable. 0 = report every volume.
   minQuantity: number;
 }
 
-export const DEFAULT_DISCLOSURE_POLICY: DisclosurePolicy = { ladder: [1, 2, 5], haircut: 1, minQuantity: 1000 };
+export const DEFAULT_DISCLOSURE_POLICY: DisclosurePolicy = { significantFigures: 2, haircut: 1, minQuantity: 0 };
 
-// Largest ladder step <= the estimate after haircut, or 0 below minQuantity.
+// Commercial availability for an estimate under the policy: haircut, then round down.
 export function quantizeAvailability(estimate: number, policy: DisclosurePolicy): number {
   if (!Number.isFinite(estimate) || estimate <= 0) return 0;
   const offered = Math.floor(estimate * policy.haircut);
-  if (offered < policy.minQuantity || offered < 1) return 0;
+  if (offered < 1 || offered < policy.minQuantity) return 0;
   // Integer decade from the digit count avoids log10 rounding at exact powers of ten.
-  const decade = 10 ** (String(offered).length - 1);
-  let step = decade; // ladder always contains 1
-  for (const m of policy.ladder) {
-    const candidate = Math.round(m * decade);
-    if (candidate <= offered) step = candidate;
+  const digits = String(offered).length;
+  if (policy.ladder) {
+    const decade = 10 ** (digits - 1);
+    let step = decade; // ladder always contains 1
+    for (const m of policy.ladder) {
+      const candidate = Math.round(m * decade);
+      if (candidate <= offered) step = candidate;
+    }
+    return step;
   }
-  return step;
-}
-
-// True when n is a value quantizeAvailability can produce under this policy (0 or a ladder step).
-export function isDisclosableQuantity(n: number, policy: DisclosurePolicy): boolean {
-  return n === 0 || quantizeAvailability(n, { ...policy, haircut: 1, minQuantity: 0 }) === n;
+  const unit = 10 ** Math.max(0, digits - policy.significantFigures);
+  return Math.floor(offered / unit) * unit;
 }
 
 // Parses the optional `disclosure` block of gam.json / forecast.json. Fail-closed on anything odd.
@@ -53,15 +56,25 @@ export function parseDisclosurePolicy(raw: unknown, where: string): DisclosurePo
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new Error(`[disclosure] ${where}: "disclosure" must be an object.`);
   }
-  const r = raw as { ladder?: unknown; haircut?: unknown; min_quantity?: unknown };
+  const r = raw as { significant_figures?: unknown; ladder?: unknown; haircut?: unknown; min_quantity?: unknown };
 
-  const ladder = r.ladder ?? DEFAULT_DISCLOSURE_POLICY.ladder;
+  if (r.ladder !== undefined && r.significant_figures !== undefined) {
+    throw new Error(`[disclosure] ${where}: set either disclosure.significant_figures or disclosure.ladder, not both.`);
+  }
+
+  const significantFigures = r.significant_figures ?? DEFAULT_DISCLOSURE_POLICY.significantFigures;
+  if (typeof significantFigures !== "number" || !Number.isInteger(significantFigures) || significantFigures < 1 || significantFigures > 6) {
+    throw new Error(`[disclosure] ${where}: disclosure.significant_figures must be an integer from 1 to 6.`);
+  }
+
+  const ladder = r.ladder;
   if (
-    !Array.isArray(ladder) ||
-    ladder.length === 0 ||
-    !ladder.every((m) => typeof m === "number" && Number.isFinite(m) && m >= 1 && m < 10) ||
-    ladder[0] !== 1 ||
-    !ladder.every((m, i) => i === 0 || m > (ladder[i - 1] as number))
+    ladder !== undefined &&
+    (!Array.isArray(ladder) ||
+      ladder.length === 0 ||
+      !ladder.every((m) => typeof m === "number" && Number.isFinite(m) && m >= 1 && m < 10) ||
+      ladder[0] !== 1 ||
+      !ladder.every((m, i) => i === 0 || m > (ladder[i - 1] as number)))
   ) {
     throw new Error(
       `[disclosure] ${where}: disclosure.ladder must be ascending mantissas in [1, 10) starting at 1, e.g. [1, 2, 5].`
@@ -78,7 +91,7 @@ export function parseDisclosurePolicy(raw: unknown, where: string): DisclosurePo
     throw new Error(`[disclosure] ${where}: disclosure.min_quantity must be an integer >= 0.`);
   }
 
-  return { ladder: ladder as number[], haircut, minQuantity };
+  return { significantFigures, haircut, minQuantity, ...(ladder ? { ladder: ladder as number[] } : {}) };
 }
 
 // The policy lives next to the data it governs: the `disclosure` block of config/gam.json when the

@@ -32,12 +32,8 @@
     }
   },
   "disclosure": {
-    "ladder": [
-      1,
-      2,
-      5
-    ],
+    "significant_figures": 2,
     "haircut": 1,
-    "min_quantity": 1000
+    "min_quantity": 0
   }
 }

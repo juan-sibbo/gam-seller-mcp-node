@@ -351,23 +351,24 @@ bucket. Buyers are answered from that snapshot (`synthetic: false`); a buyer req
 triggers a GAM call. A family missing from `gam.json` or a period outside the snapshot returns
 `NOT_FOUND`.
 
-**Disclosure policy — what `check_availability` reveals.** Buyers never see the forecast itself.
-They see your *commercial availability*: the forecast after an optional safety margin, rounded down
-to a step of your ladder. Set it in the optional `disclosure` block of `gam.json` (or
-`forecast.json`):
+**How volumes are presented (`check_availability`).** Buyers see your forecast for the product and
+period, rounded down to 2 significant figures by default (2,784,312 → 2,700,000): a forecast has no
+unit-level precision, and rounding down means the node never offers more than GAM forecasts. Adjust
+it in the optional `disclosure` block of `gam.json` (or `forecast.json`):
 
 ```json
-"disclosure": { "ladder": [1, 2, 5], "haircut": 1, "min_quantity": 1000 }
+"disclosure": { "significant_figures": 2, "haircut": 1, "min_quantity": 0 }
 ```
 
-- `ladder` — steps per decade. `[1, 2, 5]` gives 1k, 2k, 5k, 10k, 20k, 50k… A coarser ladder (`[1]`,
-  orders of magnitude) reveals less; a finer one (`[1, 1.5, 2, 3, 5, 7]`) is more useful to buyers.
-- `haircut` — fraction of the forecast you offer, (0, 1]. Default 1 (no margin); lower it if your
-  forecasts are volatile.
-- `min_quantity` — below this, the answer is `unavailable`. Hides the long tail of tiny volumes.
+- `significant_figures` — precision, 1 to 6. Default 2.
+- `haircut` — fraction of the forecast you offer, (0, 1]. Default 1; lower it if your forecasts are
+  volatile and you would rather not promise the full figure.
+- `min_quantity` — below this, the answer is `unavailable`. Default 0.
+- `ladder` — instead of `significant_figures`, present volumes in coarser steps, e.g. `[1, 2, 5]` for
+  1k, 2k, 5k, 10k… Only if you prefer to show less; it is your commercial choice.
 
-The rounding itself cannot be turned off: every answer is computed from the rounded value, which is
-what stops a buyer from finding the exact forecast by asking with slightly different volumes.
+Other GAM figures — matched, possible and reserved units, which reflect other buyers' bookings —
+are never used, and the audit ledger records the decision, not volumes.
 
 **Forecast conditions.** GAM's availability depends on the prospective line item: dates, sizes,
 ad units, environment and priority. Mirror how the product is really sold — set `priority` (6–10,

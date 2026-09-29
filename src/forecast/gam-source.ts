@@ -24,10 +24,10 @@ export { ForecastUnavailableError };
 // Each forecast is a PROSPECTIVE line item — built in memory, sent to getAvailabilityForecast,
 // never saved. Nothing in GAM is created, modified or reserved. Only `availableUnits` is kept. It
 // is a forecast CONDITIONED on that prospective line item (type, priority, dates, sizes, ad units),
-// so a family's targeting should mirror how the product is really sold. The raw figure stays inside
-// the node: buyers see a Low/Mid/High bucket (get_forecast) or the publisher's commercial
-// availability after the disclosure policy (check_availability) — never availableUnits itself, and
-// the ledger records neither (KANON §Logs-y-Audit).
+// so a family's targeting should mirror how the product is really sold. Buyers see it as a
+// Low/Mid/High bucket (get_forecast) or as commercial availability rounded by the publisher's
+// disclosure policy (check_availability). Other GAM figures (matched/possible/reserved units, which
+// reflect other buyers' bookings) are never used, and the ledger records no volumes.
 //
 // Config (config/gam.json — OPT-IN; absent → seeded/synthetic source, unchanged behavior):
 //   {
@@ -41,7 +41,7 @@ export { ForecastUnavailableError };
 //       "video-pre-roll": { "sizes": ["640x480"], "environment": "VIDEO_PLAYER",
 //                           "ad_unit_ids": ["21700000000"] }
 //     },
-//     "disclosure": { "ladder": [1, 2, 5], "haircut": 1, "min_quantity": 1000 }   // optional
+//     "disclosure": { "significant_figures": 2, "haircut": 1, "min_quantity": 0 }   // optional
 //   }
 
 export const GAM_CONFIG_FILE = "gam.json";
@@ -198,7 +198,7 @@ interface NetworkInfo {
 
 interface SnapshotEntry {
   bucket: ForecastBucket;
-  available: number; // raw availableUnits — in-process only, never serialized to a buyer or the ledger
+  available: number; // availableUnits as GAM returned it; rounded by the disclosure policy before reaching a buyer
   fetchedAt: number;
 }
 

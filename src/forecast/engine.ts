@@ -45,9 +45,9 @@ export const AVAILABILITY_STATUS = {
 
 export type AvailabilityStatus = (typeof AVAILABILITY_STATUS)[keyof typeof AVAILABILITY_STATUS];
 
-// check_availability result. `deliverable_up_to` is the publisher's commercial availability (a
-// ladder step after the disclosure policy), never the raw forecast. It is an estimate under the
-// product's forecast conditions, not a reservation.
+// check_availability result. `deliverable_up_to` is the publisher's commercial availability: the
+// forecast estimate rounded down by the disclosure policy (default 2 significant figures). It is an
+// estimate under the product's forecast conditions, not a reservation.
 export interface AvailabilityResult {
   family_id: string;
   period: string;
@@ -61,8 +61,7 @@ export interface AvailabilityResult {
   legal_basis_provenance: null;
 }
 
-// Pure decision: a function of (commercial availability, requested) ONLY. Keeping the raw estimate
-// out of this function is what makes repeated questions reveal nothing beyond the ladder step.
+// The status is decided on the same figure the buyer sees, so the two never contradict each other.
 export function decideAvailability(commercial: number, requested: number): AvailabilityStatus {
   if (commercial <= 0) return AVAILABILITY_STATUS.UNAVAILABLE;
   return requested <= commercial ? AVAILABILITY_STATUS.AVAILABLE : AVAILABILITY_STATUS.PARTIAL;
@@ -120,8 +119,8 @@ export class ForecastEngine {
     };
   }
 
-  // "Can you deliver `requested` impressions of this family in this period?" The raw estimate is
-  // quantized by the publisher's disclosure policy before the decision is taken.
+  // "Can you deliver `requested` impressions of this family in this period?" The estimate is rounded
+  // by the publisher's disclosure policy before the decision is taken.
   async checkAvailability(family_id: string, period: string, requested: number): Promise<AvailabilityResult> {
     if (!this.source.getAvailability) {
       throw new Error("forecast source does not support availability checks");
