@@ -291,9 +291,11 @@ a webhook shim, a CRM sync, whatever fits. A committed record looks like:
 
 Two deliberate properties:
 
-- **The node makes no outbound calls.** Delivery is a local file drop; forwarding is your process,
-  not the node's. This preserves the node's SSRF/egress deny-all posture — a URL in
-  `MCP_INTENT_HANDOFF` is refused, with a pointer back to the file drop.
+- **The handoff makes no outbound call.** Delivery is a local file drop; forwarding is your
+  process, not the node's. Buyer request handling makes no network egress — the node's only
+  outbound connections are the operator-opted audit anchors (`MCP_ANCHOR_SINK=tsa|s3|<module>`),
+  which run outside the request path. A URL in `MCP_INTENT_HANDOFF` is refused, with a pointer
+  back to the file drop.
 - **A handoff is a notification, never a hold.** It does not touch an ad server, reserve inventory,
   or create a GAM order. Delivery is fire-and-forget: a slow or failing forwarder never delays or
   fails the buyer's commit (the audit ledger is the record of record). Delivery outcomes are on the

@@ -27,6 +27,21 @@ MCP tools; the audience-blind, egress-deny-all, no-ad-server-writes posture is u
   never delays or fails the buyer's commit (the ledger is the record of record); failures surface
   on `mcp_intent_handoff_total{outcome="failed"}` and stderr, never swallowed.
 
+### Egress claims aligned with the external audit anchors
+
+- **Public contract corrected.** The README and deployment guide claimed the node makes "no
+  outbound calls (SSRF/egress deny-all)", while the TSA (#94) and S3 (#95) anchor backends make
+  operator-configured outbound connections. The contract now reads: buyer request handling makes
+  no outbound network calls; the only egress is the operator-opted audit anchor, outside the
+  request path. Disclosure (what may appear in buyer responses) and network egress (which external
+  systems the process may reach) are now named separately.
+- **Honest guardrail.** The static grep for the text `fetch(` passed while the TSA backend POSTed
+  through an injected fetch reference. It is replaced by `tests/egress-surface.test.ts`: network
+  capabilities (global fetch, network modules, non-literal dynamic imports) may live only in the
+  declared modules; anchor backends are reachable only via the operator-config resolver, never
+  from `buildServer`; no buyer-facing tool accepts a destination-like argument. A new outbound
+  capability fails CI until it is declared on purpose.
+
 ## [0.1.0] — 2026-07-22
 
 First tagged release. Everything below was developed iteratively and is now stable enough
