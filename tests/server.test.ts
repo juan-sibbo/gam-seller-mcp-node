@@ -75,6 +75,7 @@ async function setupServer(entitlements: EntitlementsConfig = TEST_ENTITLEMENTS_
     forecastRateLimiter: new RateLimiter(),
     ledger,
     replayGuard: new ReplayGuard(),
+    requireIdempotencyKey: false, // not exercising SEC-GATE-3 — see idempotency-required.test.ts
   });
 
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -233,6 +234,7 @@ describe("server integration — discover_products", () => {
       forecastRateLimiter: new RateLimiter(),
       ledger: createMemoryLedger(),
       replayGuard: new ReplayGuard(),
+      requireIdempotencyKey: false, // not exercising SEC-GATE-3 — see idempotency-required.test.ts
     });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "test-expired-pricing", version: "0.0.1" });

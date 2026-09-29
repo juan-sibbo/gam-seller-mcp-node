@@ -8,6 +8,14 @@ import { PolicyEngine } from "./policy/engine.js";
 import { EntitlementStore, loadEntitlementsFromFile } from "./policy/entitlements.js";
 import { DEV_DSR_STATE_PATH } from "./policy/dsr-state.js";
 import { AllowedSurface } from "./policy/types.js";
+import {
+  conformsToDisclosure,
+  CreateIntentDisclosure,
+  DiscoverProductsDisclosure,
+  ForecastDisclosure,
+  RevokeIntentDisclosure,
+  type Disclosure,
+} from "./policy/disclosure.js";
 import { ErrorCode, makeSafeError } from "./errors/envelope.js";
 import { loadOrCreateKeyPair } from "./identity/keystore.js";
 import { TokenIssuer } from "./identity/issuer.js";
@@ -82,7 +90,8 @@ interface ServerDeps {
   metricsRegistry?: MetricsRegistry;
   // When true, an authenticated request without a client_request_id is rejected (issue #82):
   // client_request_id drives SEC-GATE-3 replay detection, so omitting it must not bypass the gate.
-  // Absent → read from MCP_REQUIRE_IDEMPOTENCY_KEY (default off, back-compat). Injectable for tests.
+  // Absent → read from MCP_REQUIRE_IDEMPOTENCY_KEY (required by default since v0.9.0; explicit
+  // opt-out only). Injectable for tests.
   requireIdempotencyKey?: boolean;
   // Delivery sink for a committed intent — closes the handoff loop to the publisher's classic
   // sales rails (src/intent/handoff.ts). Optional/back-compat: absent → NullHandoffSink (no
@@ -99,7 +108,7 @@ const REVOKE_INTENT_RATE_LIMIT_WINDOW_MS = 2_000;
 function buildServer(deps: ServerDeps): McpServer {
   const { store, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, metricsRegistry } = deps;
   // SEC-GATE-3 posture: when required, an authenticated request must carry a client_request_id
-  // (issue #82) so replay detection cannot be bypassed by omission. Default from env, back-compat off.
+  // (issue #82) so replay detection cannot be bypassed by omission. Default from env: required.
   const requireIdempotencyKey = deps.requireIdempotencyKey ?? requiresIdempotencyKey();
   // Shared commitment store when provided (main() path); a per-server fallback keeps
   // legacy call sites that never touch create_intent working unchanged.
@@ -216,12 +225,16 @@ function buildServer(deps: ServerDeps): McpServer {
   // not convention (#67 / C-02). The rate limiter stays per-surface: each tool passes its own
   // instance (every authenticated tool has one since #80, revoke_intent included).
   // Only `well_known_capabilities` (public trust anchor) is registered raw, by design.
+  // The epilogue is the disclosure gate: every guarded tool MUST declare a strict response
+  // schema (src/policy/disclosure.ts), and a response carrying any undeclared field is replaced
+  // by a generic INTERNAL_ERROR before it leaves the node. The surface label above only decides
+  // WHO may call a tool; this decides WHAT the tool may return.
   function guardedTool<Args>(
     name: string,
     description: string,
     schema: z.ZodRawShape,
     annotations: ToolAnnotations,
-    guard: { surface: AllowedSurface; metricTool: MetricTool; rateLimiter?: RateLimiter },
+    guard: { surface: AllowedSurface; metricTool: MetricTool; rateLimiter?: RateLimiter; disclosure: Disclosure },
     handle: (args: Args, ctx: GuardedContext) => ToolResult | Promise<ToolResult>
   ): void {
     server.tool(name, description, schema, annotations, async (args) => {
@@ -269,7 +282,18 @@ function buildServer(deps: ServerDeps): McpServer {
         return rateLimitedResult(request_id);
       }
 
-      return handle(args as Args, { buyer_id, request_id });
+      const result = await handle(args as Args, { buyer_id, request_id });
+      if (!conformsToDisclosure(result, guard.disclosure)) {
+        // A handler bug, never buyer-triggerable: surface it to the operator (tool name only, no
+        // payload — the payload is exactly what must not travel) and fail closed to the buyer.
+        metricsRegistry?.increment("mcp_disclosure_rejected_total", { tool: guard.metricTool });
+        process.stderr.write(`[disclosure] ${name}: response does not match its declared schema — withheld\n`);
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(makeSafeError(ErrorCode.INTERNAL_ERROR, "An internal error occurred.", request_id, CONTRACT_VERSION)) }],
+          isError: true,
+        };
+      }
+      return result;
     });
   }
 
@@ -304,10 +328,10 @@ function buildServer(deps: ServerDeps): McpServer {
     "Discover coarse product families available to this buyer.",
     {
       token: z.string().optional().describe("Buyer bearer JWT (RS256, aud=seller-mcp-node). Identity is derived from token.sub."),
-      client_request_id: z.string().optional().describe("Client-supplied idempotency key for replay detection"),
+      client_request_id: z.string().optional().describe("Idempotency key for replay detection — required on every call unless the operator opted out; fresh value per call"),
     },
     { title: "Discover Products", readOnlyHint: true, openWorldHint: false },
-    { surface: AllowedSurface.PRODUCT_DISCOVERY, metricTool: MetricTool.DISCOVER_PRODUCTS, rateLimiter },
+    { surface: AllowedSurface.PRODUCT_DISCOVERY, metricTool: MetricTool.DISCOVER_PRODUCTS, rateLimiter, disclosure: DiscoverProductsDisclosure },
     (_args, { buyer_id, request_id }) => {
       // Synthetic catalog from config — zero GAM (S4).
       // Egress no-leak guard (C4): projectFamily copies ONLY the buyer-facing fields by name,
@@ -333,10 +357,10 @@ function buildServer(deps: ServerDeps): McpServer {
       family_id: z.string().describe("Product family ID from discover_products"),
       period: z.string().describe("Target period (e.g. Q4-2026, 2026-10)"),
       token: z.string().optional().describe("Buyer bearer JWT (RS256, aud=seller-mcp-node). Identity is derived from token.sub."),
-      client_request_id: z.string().optional().describe("Client-supplied idempotency key for replay detection"),
+      client_request_id: z.string().optional().describe("Idempotency key for replay detection — required on every call unless the operator opted out; fresh value per call"),
     },
     { title: "Get Availability Forecast", readOnlyHint: true, openWorldHint: false },
-    { surface: AllowedSurface.FORECAST, metricTool: MetricTool.GET_FORECAST, rateLimiter: forecastRateLimiter },
+    { surface: AllowedSurface.FORECAST, metricTool: MetricTool.GET_FORECAST, rateLimiter: forecastRateLimiter, disclosure: ForecastDisclosure },
     async ({ family_id, period }, { buyer_id, request_id }) => {
       const result = await forecastEngine.forecast(family_id, period);
       // FORECAST_REQUEST payload is minimized: bucket + coarse identifiers only
@@ -366,10 +390,10 @@ function buildServer(deps: ServerDeps): McpServer {
       period: z.string().describe("Target period (e.g. Q4-2026, 2026-10)"),
       price_ref: z.number().describe("The firm list price the buyer commits to; must match the family's current firm price"),
       token: z.string().optional().describe("Buyer bearer JWT (RS256, aud=seller-mcp-node). Identity is derived from token.sub."),
-      client_request_id: z.string().optional().describe("Client-supplied idempotency key for replay detection"),
+      client_request_id: z.string().optional().describe("Idempotency key for replay detection — required on every call unless the operator opted out; fresh value per call"),
     },
     { title: "Create Buying Intent", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-    { surface: AllowedSurface.INTENT, metricTool: MetricTool.CREATE_INTENT, rateLimiter: intentRateLimiter },
+    { surface: AllowedSurface.INTENT, metricTool: MetricTool.CREATE_INTENT, rateLimiter: intentRateLimiter, disclosure: CreateIntentDisclosure },
     ({ family_id, period, price_ref }, { buyer_id, request_id }) => {
       // Fail-closed on a stale or non-matching firm price (plan §3): priceFor returns
       // undefined when the family is unknown OR its firm price has expired — never commit
@@ -455,10 +479,10 @@ function buildServer(deps: ServerDeps): McpServer {
     {
       intent_id: z.string().describe("The intent_id returned by create_intent"),
       token: z.string().optional().describe("Buyer bearer JWT (RS256, aud=seller-mcp-node). Identity is derived from token.sub."),
-      client_request_id: z.string().optional().describe("Client-supplied idempotency key for replay detection"),
+      client_request_id: z.string().optional().describe("Idempotency key for replay detection — required on every call unless the operator opted out; fresh value per call"),
     },
     { title: "Revoke Buying Intent", readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
-    { surface: AllowedSurface.INTENT, metricTool: MetricTool.REVOKE_INTENT, rateLimiter: revokeIntentRateLimiter },
+    { surface: AllowedSurface.INTENT, metricTool: MetricTool.REVOKE_INTENT, rateLimiter: revokeIntentRateLimiter, disclosure: RevokeIntentDisclosure },
     ({ intent_id }, { buyer_id, request_id }) => {
       // Buyer-scoped: undefined when the intent is absent, another buyer's, terminal, or lapsed.
       const revoked = intentStore.revoke(intent_id, buyer_id);

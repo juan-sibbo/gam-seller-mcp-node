@@ -11,6 +11,7 @@
 // is the GOVERNED REFUSALS at the end — the node saying "no" by design (fail-closed auth,
 // Default-Deny, fail-closed pricing) — and the audit trail that records every allow AND deny.
 
+import { randomUUID } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { buildServer } from "../src/server.js";
@@ -126,7 +127,9 @@ async function main(): Promise<void> {
   const curiousToken = (await issuer.issue(CURIOUS_BUYER, BUYER_AUD)).token;
 
   async function call(name: string, args: Record<string, unknown>): Promise<ToolReply> {
-    const res = await client.callTool({ name, arguments: args });
+    // Every authenticated call carries a fresh idempotency key — required by default (v0.9.0+).
+    const withKey = name === "well_known_capabilities" ? args : { client_request_id: randomUUID(), ...args };
+    const res = await client.callTool({ name, arguments: withKey });
     const text = (res.content as Array<{ type: string; text?: string }>)[0]?.text ?? "";
     let json: Record<string, unknown> = {};
     try {

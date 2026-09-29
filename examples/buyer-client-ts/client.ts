@@ -15,6 +15,7 @@
 // v0.4 Bloque A: the buyer's identity is derived from its bearer token's `sub` — there is
 // no buyer_id argument. Pass the token at construction (default for every call) or per call.
 
+import { randomUUID } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
@@ -74,7 +75,9 @@ export interface CallOptions {
   /** Buyer bearer JWT (RS256, aud=seller-mcp-node). Overrides the client's default token.
    *  Required by the node — identity is derived from token.sub. */
   token?: string;
-  /** Idempotency key for the node's replay detection (SEC-GATE-3). */
+  /** Idempotency key for the node's replay detection (SEC-GATE-3). The node requires one on every
+   *  authenticated call (v0.9.0+); when omitted, the client generates a fresh UUID per call. Pass
+   *  your own only to retry the SAME logical call (a repeat is then rejected as a replay). */
   clientRequestId?: string;
 }
 
@@ -153,9 +156,8 @@ export class SellerMcpBuyerClient {
 
   // Register a firm buying intent at the family's CURRENT firm price (the sole write surface —
   // a soft, TTL'd commitment, NOT a GAM order or inventory hold). `priceRef` must match the firm
-  // price the node advertises; a mismatch/stale price is rejected as INVALID_REQUEST. Pass a fresh
-  // `clientRequestId` per call: the node's replay guard is idempotent on it, and a deployment with
-  // MCP_REQUIRE_IDEMPOTENCY_KEY=1 requires it.
+  // price the node advertises; a mismatch/stale price is rejected as INVALID_REQUEST. Every call
+  // carries a `clientRequestId` (auto-generated unless supplied) — the node requires it (v0.9.0+).
   async createIntent(
     familyId: string,
     period: string,
@@ -200,7 +202,8 @@ function argsFrom(opts: CallOptions, defaultToken?: string): Record<string, unkn
   const out: Record<string, unknown> = {};
   const token = opts.token ?? defaultToken;
   if (token) out["token"] = token;
-  if (opts.clientRequestId) out["client_request_id"] = opts.clientRequestId;
+  // The node requires an idempotency key on every authenticated call (v0.9.0+, SEC-GATE-3).
+  out["client_request_id"] = opts.clientRequestId ?? randomUUID();
   return out;
 }
 

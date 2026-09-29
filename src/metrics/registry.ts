@@ -71,6 +71,10 @@ const COUNTERS: Record<string, CounterDef> = {
     help: "Total requests rejected as replays, by tool.",
     labelKeys: ["tool"],
   },
+  mcp_disclosure_rejected_total: {
+    help: "Total tool responses withheld because they did not match the tool's declared disclosure schema, by tool.",
+    labelKeys: ["tool"],
+  },
   mcp_intent_handoff_total: {
     help: "Total committed-intent handoff deliveries to the publisher's sales rails, by outcome.",
     labelKeys: ["outcome"],

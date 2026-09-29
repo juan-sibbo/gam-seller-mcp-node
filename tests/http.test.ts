@@ -101,6 +101,7 @@ describe("HTTP transport — E-12 canonical route + MCP endpoint", () => {
       forecastEngine: new ForecastEngine(),
       forecastRateLimiter: new RateLimiter(),
       ledger: createMemoryLedger(),
+      requireIdempotencyKey: false, // not exercising SEC-GATE-3 — see idempotency-required.test.ts
     };
     httpServer = await startHttpServer(
       {

@@ -70,6 +70,9 @@ Every call flows through the same pipeline before any domain logic runs:
   [Domain]      Catalog / ForecastEngine — synthetic today, real GAM adapter in progress
        │
        ▼
+  [Disclosure]  Response checked against the tool's strict schema — undeclared field → withheld
+       │
+       ▼
   [Audit]       Append-only hash-chained ledger, buyer pseudonymized (HMAC)
        │
        ▼
@@ -78,9 +81,10 @@ Every call flows through the same pipeline before any domain logic runs:
 
 Each request-path gate rejects on failure. One honest caveat to the diagram above:
 
-- **`client_request_id`** (the replay-guard deduplication key) is optional by default; a request
-  that omits it bypasses SEC-GATE-3. A deployment can set `MCP_REQUIRE_IDEMPOTENCY_KEY` to make it
-  mandatory on every authenticated surface (fail-closed) — off by default for back-compat.
+- **`client_request_id`** (the replay-guard deduplication key) is **required by default** on every
+  authenticated surface since v0.9.0 — a request without it is rejected, so SEC-GATE-3 cannot be
+  bypassed by omission. An operator can explicitly opt out for legacy clients with
+  `MCP_REQUIRE_IDEMPOTENCY_KEY=0`, which reopens that bypass.
 
 The rate-limit stage covers **every** authenticated tool — the read surfaces, `create_intent`,
 and `revoke_intent` — so no authenticated surface bypasses it.
@@ -196,7 +200,7 @@ see [`docs/PUBLISHER-DEPLOYMENT.md`](docs/PUBLISHER-DEPLOYMENT.md):
   **no outbound call** — forwarding is the operator's process, and a URL value is refused. A
   handoff record is a notification, never a GAM order or inventory hold.
 - **Harden for the road**: `MCP_REQUIRE_OPERATOR_CONFIG=1` (refuse to boot on demo config),
-  `MCP_REQUIRE_IDEMPOTENCY_KEY=1` (close the replay-bypass), `MCP_ANCHOR_SINK=tsa` (anchor the
+  `MCP_ANCHOR_SINK=tsa` (anchor the
   audit trail to a third party).
 
 **Network egress — declared and bounded, not deny-all.** Buyer request handling makes no outbound
@@ -243,7 +247,7 @@ changes state over time is both a proof of honesty and a proof of progress.
 | Attribution (`buyer_id` / `request_id`) is stored per entry but sits **outside** the chain's tamper-evidence hash | `audit/event.ts` | Design decision, not a defect — traceability vs. erasability ([ADR-4](docs/adr/ADR-4.md)) | — |
 | Head-hash anchor rewrote its whole file each write (`writeFileSync`) — not append-only, no external WORM | `audit/anchor.ts` | ✅ **Closed** 2026-08-23 — append-only JSONL + injectable `AnchorSink`; selectable `tsa` (RFC 3161) and `s3` (S3 Object Lock) backends via `MCP_ANCHOR_SINK` | [#92](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/92) [#94](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/94) [#95](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/95) |
 | External WORM anchoring needs the operator to point at a live write-once destination (a TSA URL, or a locked bucket) — the node ships the backends, not the destination | `audit/anchor-tsa.ts`, `audit/anchor-s3.ts` | **Open** — deployment boundary (infra act) | — |
-| `client_request_id` (replay guard) is optional by default; omitting it bypasses SEC-GATE-3 | `src/server.ts` | **Mitigated** 2026-08-24 — `MCP_REQUIRE_IDEMPOTENCY_KEY` makes it mandatory on every authenticated surface (fail-closed); optional by default for back-compat | [#82](https://github.com/juan-sibbo/gam-seller-mcp-node/issues/82) |
+| `client_request_id` (replay guard) was optional; omitting it bypassed SEC-GATE-3 | `src/server.ts` | **Closed** in v0.9.0 — required by default on every authenticated surface (fail-closed); `MCP_REQUIRE_IDEMPOTENCY_KEY=0` is an explicit operator opt-out | [#82](https://github.com/juan-sibbo/gam-seller-mcp-node/issues/82) |
 | No TLS in transit (a reverse proxy is expected to terminate) | — | **Open** — deployment boundary | — |
 | `revoke_intent` is not covered by the rate-limit stage | `src/server.ts` | ✅ **Closed** 2026-08-18 — now behind the rate-limit gate like every authenticated surface | [#80](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/80) |
 | GDPR DSR CLI (`scripts/dsr.ts`, …) not shipped in the npm package | `package.json` `files` | ✅ **Closed** 2026-08 — ships as the `gam-seller-dsr` bin | [#78](https://github.com/juan-sibbo/gam-seller-mcp-node/pull/78) |
@@ -259,7 +263,7 @@ Key modules:
 | Module | Role |
 |--------|------|
 | `src/server.ts` | MCP tool definitions + request pipeline |
-| `src/policy/` | Default-Deny engine, entitlement store, surface allowlist/denylist |
+| `src/policy/` | Default-Deny engine, entitlement store, surface allowlist/denylist, per-tool disclosure schemas |
 | `src/identity/` | RS256 key management, token issuance/validation, revocation denylist |
 | `src/audit/` | Hash-chained ledger, HMAC pseudonymization, append-only head-hash anchoring with selectable WORM backends (`anchor-tsa.ts`, `anchor-s3.ts`) |
 | `src/pricing/` | Firm list price store, expiry-aware (fail-closed on stale prices) |
@@ -272,12 +276,18 @@ Key modules:
 **Default-Deny.** Every request is denied unless an explicit entitlement says otherwise — there
 is no "allow by default" path in the code.
 
-**Structural allow/denylist (SEC-GATE-*).** Response surfaces are governed by a fixed list enforced
-at the policy layer, independent of which tool was called. Exact pricing, deal IDs, raw availability
-numbers, cross-buyer state, real inventory holds (soft-lock), and any ad-server write are permanently
-denied. The one permitted write is a buyer's own commitment (`create_intent` / `revoke_intent`),
-which required an explicit amendment to the surface allowlist and stays buyer-scoped. Adding a new
-tool in the future cannot bypass this.
+**Two gates: who may call a tool, and what it may return.** The policy layer works on surface
+*labels*: each authenticated tool declares one allowed surface when it is registered, and exact
+pricing, deal IDs, raw availability numbers, cross-buyer state, real inventory holds (soft-lock)
+and any ad-server write are permanently on the denylist. That label check does not look at the
+response, so it cannot on its own stop a tool under an allowed label from returning something it
+shouldn't. The **disclosure gate** does: every authenticated tool must declare a strict response
+schema (`src/policy/disclosure.ts`), and a response carrying any undeclared field is withheld and
+replaced by a generic `INTERNAL_ERROR` (counted on `mcp_disclosure_rejected_total`). A new tool
+cannot be registered without that schema, so adding a buyer-visible field means changing it in one
+reviewable file. The one permitted write is a buyer's own commitment (`create_intent` /
+`revoke_intent`), which required an explicit amendment to the surface allowlist and stays
+buyer-scoped.
 
 **Opaque errors.** A denied request, a failed authentication, and a revoked token all return the
 same generic `AUTH_FAILED` code. Internal reasons never reach the buyer.

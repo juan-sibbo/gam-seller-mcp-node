@@ -14,6 +14,7 @@ import { ForecastEngine } from "../src/forecast/engine.js";
 import { EntitlementStore, TEST_ENTITLEMENTS_DEMO_CONFIG } from "../src/policy/entitlements.js";
 import { RateLimiter } from "../src/rate-limiter/limiter.js";
 import { createMemoryLedger } from "../src/audit/ledger.js";
+import { ReplayGuard } from "../src/audit/replay.js";
 import { buildServer } from "../src/server.js";
 import { startHttpServer } from "../src/http.js";
 import { SellerMcpBuyerClient } from "../examples/buyer-client-ts/client.js";
@@ -50,6 +51,8 @@ describe("examples/buyer-client-ts — SellerMcpBuyerClient against a live node"
       forecastEngine: new ForecastEngine(),
       forecastRateLimiter: new RateLimiter(0),
       ledger: createMemoryLedger(),
+      // The client sends a fresh client_request_id per call, so this runs the default (required) posture.
+      replayGuard: new ReplayGuard(),
     };
     httpServer = await startHttpServer(
       { makeServer: () => buildServer(deps), wellKnown },

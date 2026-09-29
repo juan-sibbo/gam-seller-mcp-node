@@ -99,6 +99,7 @@ describe("discover_products egress — structural no-leak", () => {
       forecastRateLimiter: new RateLimiter(),
       ledger: createMemoryLedger(),
       replayGuard: new ReplayGuard(),
+      requireIdempotencyKey: false, // not exercising SEC-GATE-3 — see idempotency-required.test.ts
     });
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

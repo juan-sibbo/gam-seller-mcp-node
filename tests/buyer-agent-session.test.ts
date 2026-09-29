@@ -63,6 +63,7 @@ beforeAll(async () => {
     forecastEngine: new ForecastEngine(),
     forecastRateLimiter,
     ledger: createMemoryLedger(),
+    requireIdempotencyKey: false, // not exercising SEC-GATE-3 — see idempotency-required.test.ts
   };
   httpServer = await startHttpServer(
     { makeServer: () => buildServer(deps), wellKnown },

@@ -50,6 +50,7 @@ beforeAll(async () => {
     forecastRateLimiter: new RateLimiter(),
     ledger: createMemoryLedger(),
     replayGuard: new ReplayGuard(),
+    requireIdempotencyKey: false, // not exercising SEC-GATE-3 — see idempotency-required.test.ts
     metricsRegistry: metrics,
   };
   httpServer = await startHttpServer(

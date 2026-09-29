@@ -42,9 +42,8 @@ async function main(): Promise<void> {
     log("capabilities", `${caps.node_id} · posture=${caps.posture} · personal_data=${caps.privacy_posture.end_user_personal_data}`);
 
     // 2 · Discover — what can this buyer buy, and at what firm price?
-    // A fresh idempotency key per call: harmless normally, and REQUIRED when the node runs with
-    // MCP_REQUIRE_IDEMPOTENCY_KEY=1 (the production posture) — every authenticated call must carry
-    // a client_request_id or it is refused, so a correct buyer agent always sends one.
+    // A fresh idempotency key per call: the node REQUIRES one on every authenticated call (v0.9.0+
+    // default; the client would auto-generate it, shown explicitly here for clarity).
     const families = await buyer.discoverProducts({ clientRequestId: randomUUID() });
     log("discover", `${families.length} family(ies): ${families.map((f) => f.family_id).join(", ") || "(none)"}`);
 

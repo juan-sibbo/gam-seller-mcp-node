@@ -129,6 +129,7 @@ async function setup(): Promise<Ctx> {
     forecastRateLimiter: new RateLimiter(),
     ledger,
     replayGuard: new ReplayGuard(),
+    requireIdempotencyKey: false, // not exercising SEC-GATE-3 — see idempotency-required.test.ts
     intentStore,
   });
 
