@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.11.0] — 2026-09-29 — availability a buyer can act on
 
 ### `check_availability` — an answer a buyer can act on
 
