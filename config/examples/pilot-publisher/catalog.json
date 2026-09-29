@@ -4,13 +4,29 @@
       "family_id": "display-ros",
       "label": "Run of Site — Display",
       "consent_context": null,
-      "legal_basis_provenance": null
+      "legal_basis_provenance": null,
+      "formats": [
+        "300x250",
+        "728x90",
+        "300x600"
+      ],
+      "channel": "display",
+      "properties": [
+        "example.com"
+      ]
     },
     {
       "family_id": "video-pre-roll",
       "label": "Pre-Roll Video",
       "consent_context": null,
-      "legal_basis_provenance": null
+      "legal_basis_provenance": null,
+      "formats": [
+        "640x480"
+      ],
+      "channel": "video",
+      "properties": [
+        "example.com"
+      ]
     },
     {
       "family_id": "branded-content",
@@ -26,6 +42,11 @@
     }
   ],
   "buyer_access": {
-    "pilot-buyer-001": ["display-ros", "video-pre-roll", "branded-content", "native-feed"]
+    "pilot-buyer-001": [
+      "display-ros",
+      "video-pre-roll",
+      "branded-content",
+      "native-feed"
+    ]
   }
 }

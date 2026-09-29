@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { operatorConfigDir } from "../config/resolve.js";
 import { FORECAST_BUCKET, SyntheticForecastSource, type ForecastBucket } from "./engine.js";
-import type { ForecastSource } from "./source.js";
+import type { AvailabilityEstimate, ForecastSource, ListedAvailability } from "./source.js";
 
 // SeededForecastSource — a GAM-less forecast source seeded from operator-provided data (a
 // ONE-TIME GAM report export, NOT the live ForecastService/SOAP API). It lets a pilot run on the
@@ -66,13 +66,17 @@ export function bucketForImpressions(avails: number, t: ForecastThresholds): For
 export class SeededForecastSource implements ForecastSource {
   private readonly seeds: ReadonlyMap<string, ForecastBucket>;
   private readonly fallback: ForecastSource;
+  // Seeded impression counts (entries given as avail_impressions), for check_availability.
+  private readonly units: ReadonlyMap<string, number>;
 
   constructor(
     seeds: ReadonlyMap<string, ForecastBucket>,
-    fallback: ForecastSource = new SyntheticForecastSource()
+    fallback: ForecastSource = new SyntheticForecastSource(),
+    units: ReadonlyMap<string, number> = new Map()
   ) {
     this.seeds = seeds;
     this.fallback = fallback;
+    this.units = units;
   }
 
   async getAvailsBucket(family_id: string, period: string): Promise<ForecastBucket> {
@@ -80,6 +84,23 @@ export class SeededForecastSource implements ForecastSource {
     if (seeded !== undefined) return seeded;
     // Partial seed: an unseeded family/period still answers, deterministically, via the fallback.
     return this.fallback.getAvailsBucket(family_id, period);
+  }
+
+  // Seeded count when present; otherwise (unseeded, or seeded as a literal bucket) the fallback's.
+  async getAvailability(family_id: string, period: string): Promise<AvailabilityEstimate> {
+    const units = this.units.get(seedKey(family_id, period));
+    if (units !== undefined) return { units, viewableUnits: null, asOf: null };
+    if (!this.fallback.getAvailability) {
+      throw new Error("seeded forecast: no impression count for this pair and the fallback cannot estimate one");
+    }
+    return this.fallback.getAvailability(family_id, period);
+  }
+
+  async listAvailability(): Promise<ListedAvailability[]> {
+    return [...this.units].map(([key, units]) => {
+      const [family_id, period] = JSON.parse(key) as [string, string];
+      return { family_id, period, estimate: { units, viewableUnits: null, asOf: null } };
+    });
   }
 
   // Number of (family_id, period) pairs actually seeded — used for boot logging / tests.
@@ -106,6 +127,7 @@ export class SeededForecastSource implements ForecastSource {
     validateThresholds(thresholds);
 
     const seeds = new Map<string, ForecastBucket>();
+    const units = new Map<string, number>();
     cfg.buckets.forEach((entry, i) => {
       if (
         typeof entry.family_id !== "string" ||
@@ -146,10 +168,11 @@ export class SeededForecastSource implements ForecastSource {
           );
         }
         bucket = bucketForImpressions(entry.avail_impressions, thresholds);
+        units.set(seedKey(entry.family_id, entry.period), entry.avail_impressions);
       }
       seeds.set(seedKey(entry.family_id, entry.period), bucket);
     });
-    return new SeededForecastSource(seeds, fallback);
+    return new SeededForecastSource(seeds, fallback, units);
   }
 }
 

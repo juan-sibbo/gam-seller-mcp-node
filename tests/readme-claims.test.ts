@@ -29,7 +29,7 @@ describe("README ↔ code parity (C-27 / T-8)", () => {
   });
 
   it("the MCP tool set matches between README and server.ts (both directions)", () => {
-    const EXPECTED = ["well_known_capabilities", "discover_products", "get_forecast", "create_intent", "revoke_intent"].sort();
+    const EXPECTED = ["well_known_capabilities", "discover_products", "get_forecast", "check_availability", "create_intent", "revoke_intent"].sort();
 
     // Every expected tool is named in the README.
     for (const tool of EXPECTED) {

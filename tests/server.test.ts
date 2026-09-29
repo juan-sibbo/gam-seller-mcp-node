@@ -270,6 +270,7 @@ describe("server integration — policy gate on every authenticated surface (#67
   const AUTHENTICATED_TOOLS: Array<{ name: string; extra: Record<string, unknown> }> = [
     { name: "discover_products", extra: {} },
     { name: "get_forecast", extra: { family_id: "fam-demo-01", period: "Q4-2026" } },
+    { name: "check_availability", extra: { family_id: "fam-demo-01", period: "Q4-2026", impressions: 1000 } },
     { name: "create_intent", extra: { family_id: "fam-demo-01", period: "Q4-2026", price_ref: 1 } },
     { name: "revoke_intent", extra: { intent_id: "any-id" } },
   ];
@@ -290,7 +291,7 @@ describe("server integration — policy gate on every authenticated surface (#67
     const ann = (name: string) => tools.find((t) => t.name === name)?.annotations;
 
     // Read surfaces: no state mutation, closed world (own inventory, no open-ended external calls).
-    for (const name of ["well_known_capabilities", "discover_products", "get_forecast"]) {
+    for (const name of ["well_known_capabilities", "discover_products", "get_forecast", "check_availability"]) {
       expect(ann(name)?.readOnlyHint, `${name} must be read-only`).toBe(true);
       expect(ann(name)?.openWorldHint, `${name} must be closed-world`).toBe(false);
     }
@@ -354,6 +355,7 @@ describe("server integration — rate limit on every authenticated surface (C-13
   const THROTTLED_TOOLS: Array<{ name: string; extra: Record<string, unknown> }> = [
     { name: "discover_products", extra: {} },
     { name: "get_forecast", extra: { family_id: FAMILY, period: PERIOD } },
+    { name: "check_availability", extra: { family_id: FAMILY, period: PERIOD, impressions: 1000 } },
     { name: "create_intent", extra: { family_id: FAMILY, period: PERIOD, price_ref: FIRM_PRICE } },
     { name: "revoke_intent", extra: { intent_id: "any-id" } },
   ];

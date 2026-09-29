@@ -1,5 +1,32 @@
 # Changelog
 
+## [Unreleased]
+
+### `check_availability` — an answer a buyer can act on
+
+- **New tool** (`family_id`, `period`, `impressions`): answers `available`, `partial` (up to
+  `deliverable_up_to`) or `unavailable`, with `as_of` and `valid_for_seconds`. Served from the same
+  forecast source as `get_forecast` (live GAM snapshot, seeded or synthetic); no outbound call on
+  the request path. `get_forecast` and its Low/Mid/High buckets stay for compatibility.
+- **Real volumes.** `deliverable_up_to` is the forecast rounded down to 2 significant figures by
+  default (2,784,312 → 2,700,000): honest about forecast precision, never more than GAM forecasts.
+  Buyers with access get the figure a sales rep would give them; buckets were a minimization choice
+  that treated the entitled buyer as an adversary, and that premise is retired.
+- **Publisher options** (`disclosure` block in `gam.json` / `forecast.json`): `significant_figures`,
+  `haircut` (safety margin), `min_quantity`, or a coarser `ladder` (e.g. 1-2-5) for a publisher that
+  prefers to show less. Fail-closed parsing.
+- **What stays protected:** other buyers' bookings (matched/possible/reserved units are never used),
+  floors, deals and audience data; the ledger records the decision, not volumes.
+- **Product-shaped forecasts:** `gam.json` families accept `priority` (6–10), sent on the
+  prospective line item, because GAM availability is conditioned on it.
+- **Viewable impressions:** `viewable_up_to`, from the viewable forecast GAM returns alongside the
+  total (rounded the same way); `null` when the source does not forecast it.
+- **Alternatives:** when the volume does not fit, up to 3 family × period pairs where it does —
+  same family first, then other families the buyer is entitled to — from the same snapshot.
+- **Media kit in `discover_products`:** optional `formats`, `channel` and `properties` per family in
+  `catalog.json`; with `gam.json`, formats and channel are filled from the forecast targeting.
+  Validated at load (malformed values stop the boot).
+
 ## [0.10.0] — 2026-09-29 — live GAM forecast
 
 ### Live Google Ad Manager forecast (#4, #115)

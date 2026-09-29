@@ -16,6 +16,7 @@ export const MetricTool = {
   WELL_KNOWN_CAPABILITIES: "well_known_capabilities",
   DISCOVER_PRODUCTS: "discover_products",
   GET_FORECAST: "get_forecast",
+  CHECK_AVAILABILITY: "check_availability",
   CREATE_INTENT: "create_intent",
   REVOKE_INTENT: "revoke_intent",
 } as const;

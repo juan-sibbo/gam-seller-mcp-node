@@ -13,6 +13,7 @@ import {
   CreateIntentDisclosure,
   DiscoverProductsDisclosure,
   ForecastDisclosure,
+  CheckAvailabilityDisclosure,
   RevokeIntentDisclosure,
   type Disclosure,
 } from "./policy/disclosure.js";
@@ -33,6 +34,7 @@ import { ForecastEngine } from "./forecast/engine.js";
 import { loadForecastSourceFromFile, SeededForecastSource } from "./forecast/seeded-source.js";
 import { ForecastUnavailableError, GAM_REFRESH_INTERVAL_MS, loadGamForecastSourceFromFile, type GamForecastSource } from "./forecast/gam-source.js";
 import type { ForecastSource } from "./forecast/source.js";
+import { loadDisclosurePolicyFromFile } from "./forecast/disclosure-policy.js";
 import { loadDeploymentConfigFromFile } from "./config/deployment.js";
 import { isDemoMode, demoFallbackFiles, assertOperatorConfigWhenRequired, requiresIdempotencyKey } from "./config/resolve.js";
 import { AuditLedger, DEV_LEDGER_PATH } from "./audit/ledger.js";
@@ -72,6 +74,9 @@ interface ServerDeps {
   rateLimiter: RateLimiter;
   forecastEngine: ForecastEngine;
   forecastRateLimiter: RateLimiter;
+  // check_availability limiter. Optional for back-compat with existing buildServer call sites;
+  // when absent a fresh per-server limiter with the default read policy is used.
+  availabilityRateLimiter?: RateLimiter;
   ledger: AuditLedger;
   replayGuard: ReplayGuard;
   // Commitment store (v0.5 Bloque B). Optional for back-compat with existing buildServer
@@ -106,9 +111,12 @@ interface ServerDeps {
 // held to the create quota (that would trap a legitimate multi-revoke). This is defense-in-depth
 // against a tight spam loop — NOT the ratified per-request quota (RATE_LIMIT_WINDOW_MS).
 const REVOKE_INTENT_RATE_LIMIT_WINDOW_MS = 2_000;
+// Upper bound on check_availability's requested volume — far above any real campaign, rejects junk.
+const MAX_REQUESTED_IMPRESSIONS = 10_000_000_000;
 
 function buildServer(deps: ServerDeps): McpServer {
   const { store, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, metricsRegistry } = deps;
+  const availabilityRateLimiter = deps.availabilityRateLimiter ?? new RateLimiter();
   // SEC-GATE-3 posture: when required, an authenticated request must carry a client_request_id
   // (issue #82) so replay detection cannot be bypassed by omission. Default from env: required.
   const requireIdempotencyKey = deps.requireIdempotencyKey ?? requiresIdempotencyKey();
@@ -349,6 +357,28 @@ function buildServer(deps: ServerDeps): McpServer {
     }
   );
 
+  // Buyer-safe mapping of a forecast-source failure: no source/GAM detail travels (a thrown message
+  // would otherwise be echoed to the buyer by the MCP SDK). Unexpected errors go to the operator log.
+  function forecastErrorResult(err: unknown, metricTool: MetricTool, request_id: string) {
+    let code: ErrorCode;
+    let message: string;
+    if (err instanceof ForecastUnavailableError) {
+      [code, message] =
+        err.reason === "unknown_family" || err.reason === "unknown_period"
+          ? [ErrorCode.NOT_FOUND, "No forecast is available for this family and period."]
+          : [ErrorCode.UNAVAILABLE, "Forecast temporarily unavailable."];
+      recordOutcome(metricTool, ToolOutcome.UNAVAILABLE);
+    } else {
+      process.stderr.write(`[forecast] source error: ${err instanceof Error ? err.message : String(err)}\n`);
+      [code, message] = [ErrorCode.INTERNAL_ERROR, "An internal error occurred."];
+      recordOutcome(metricTool, ToolOutcome.INTERNAL_ERROR);
+    }
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(makeSafeError(code, message, request_id, CONTRACT_VERSION)) }],
+      isError: true,
+    };
+  }
+
   // Forecast (bucketized) — s5-forecast-demo-mode-authorization-2026-07-04.md
   // Returns Low/Mid/High availability bucket. synthetic: false only when the source is a live GAM
   // snapshot (config/gam.json); synthetic and seeded sources stay synthetic: true.
@@ -369,25 +399,7 @@ function buildServer(deps: ServerDeps): McpServer {
       try {
         result = await forecastEngine.forecast(family_id, period);
       } catch (err) {
-        // Buyer-safe mapping: no source/GAM detail travels (a thrown message would otherwise be
-        // echoed to the buyer by the MCP SDK). Unexpected errors go to the operator log.
-        let code: ErrorCode;
-        let message: string;
-        if (err instanceof ForecastUnavailableError) {
-          [code, message] =
-            err.reason === "unknown_family" || err.reason === "unknown_period"
-              ? [ErrorCode.NOT_FOUND, "No forecast is available for this family and period."]
-              : [ErrorCode.UNAVAILABLE, "Forecast temporarily unavailable."];
-          recordOutcome(MetricTool.GET_FORECAST, ToolOutcome.UNAVAILABLE);
-        } else {
-          process.stderr.write(`[forecast] source error: ${err instanceof Error ? err.message : String(err)}\n`);
-          [code, message] = [ErrorCode.INTERNAL_ERROR, "An internal error occurred."];
-          recordOutcome(MetricTool.GET_FORECAST, ToolOutcome.INTERNAL_ERROR);
-        }
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(makeSafeError(code, message, request_id, CONTRACT_VERSION)) }],
-          isError: true,
-        };
+        return forecastErrorResult(err, MetricTool.GET_FORECAST, request_id);
       }
       // FORECAST_REQUEST payload is minimized: bucket + coarse identifiers only
       // (no raw avails — KANON §Logs-y-Audit).
@@ -397,6 +409,43 @@ function buildServer(deps: ServerDeps): McpServer {
         { buyer_id, request_id }
       );
       recordOutcome(MetricTool.GET_FORECAST, ToolOutcome.SUCCESS);
+      return { content: [{ type: "text", text: JSON.stringify({ ...result, request_id }) }] };
+    }
+  );
+
+  // Availability check — "can you deliver N impressions of this family in this period?"
+  // Answers available / partial (up to X) / unavailable. X is the publisher's commercial
+  // availability: the forecast estimate rounded down by the disclosure policy (default 2
+  // significant figures; disclosure-policy.ts). Served from the forecast source's snapshot — no
+  // outbound call on the request path. Z3: inventory-level data only.
+  guardedTool<{ family_id: string; period: string; impressions: number; token?: string; client_request_id?: string }>(
+    "check_availability",
+    "Check whether the publisher can deliver a number of impressions of a product family in a period. Returns available, partial (with the volume it can offer) or unavailable, the viewable share when forecast, and — if the volume does not fit — up to 3 alternative periods or families where it does. Figures are forecast estimates, rounded down (2 significant figures by default), not reservations.",
+    {
+      family_id: z.string().describe("Product family ID from discover_products"),
+      period: z.string().describe("Target period (e.g. 2026-10, Q4-2026)"),
+      impressions: z.number().int().positive().max(MAX_REQUESTED_IMPRESSIONS).describe("Impressions the buyer wants to deliver in the period"),
+      token: z.string().optional().describe("Buyer bearer JWT (RS256, aud=seller-mcp-node). Identity is derived from token.sub."),
+      client_request_id: z.string().optional().describe("Idempotency key for replay detection — required on every call unless the operator opted out; fresh value per call"),
+    },
+    { title: "Check Availability", readOnlyHint: true, openWorldHint: false },
+    { surface: AllowedSurface.FORECAST, metricTool: MetricTool.CHECK_AVAILABILITY, rateLimiter: availabilityRateLimiter, disclosure: CheckAvailabilityDisclosure },
+    async ({ family_id, period, impressions }, { buyer_id, request_id }) => {
+      let result;
+      try {
+        // Alternatives only ever name families this buyer is entitled to see.
+        const entitled = new Set(catalog.discover(buyer_id).map((f) => f.family_id));
+        result = await forecastEngine.checkAvailability(family_id, period, impressions, entitled);
+      } catch (err) {
+        return forecastErrorResult(err, MetricTool.CHECK_AVAILABILITY, request_id);
+      }
+      // Minimized like FORECAST_REQUEST: status + coarse identifiers, no volumes.
+      ledger.append(
+        EventClass.FORECAST_REQUEST,
+        { kind: "availability_check", family_id, period, status: result.status, alternatives: result.alternatives.length, synthetic: result.synthetic },
+        { buyer_id, request_id }
+      );
+      recordOutcome(MetricTool.CHECK_AVAILABILITY, ToolOutcome.SUCCESS);
       return { content: [{ type: "text", text: JSON.stringify({ ...result, request_id }) }] };
     }
   );
@@ -599,7 +648,7 @@ async function main() {
   // DSR overlay is applied on top, so restrictions/erasures exercised via the DSR CLI are
   // enforced from boot (and a corrupt overlay also fails closed).
   const store = new EntitlementStore(loadEntitlementsFromFile(), DEV_DSR_STATE_PATH);
-  const catalog = loadCatalogFromFile();
+  const baseCatalog = loadCatalogFromFile();
   // Fail-closed: loadPricingFromFile throws on missing/unparseable valid_until (D7).
   const pricingStore = loadPricingFromFile();
   // Atomic deploy boundary (C-02): if the operator declared a real deployment
@@ -636,7 +685,11 @@ async function main() {
   const gamSource = loadGamForecastSourceFromFile();
   const forecastSource: ForecastSource = gamSource ?? loadForecastSourceFromFile();
   if (gamSource) await startGamRefresh(gamSource);
-  const forecastEngine = new ForecastEngine(forecastSource);
+  // With a live GAM source, families without formats/channel in catalog.json take them from their
+  // forecast targeting, so discover_products describes what the buyer is forecasting.
+  const catalog = gamSource ? baseCatalog.withMediaKitDefaults(gamSource.mediaKitHints()) : baseCatalog;
+  const disclosurePolicy = loadDisclosurePolicyFromFile();
+  const forecastEngine = new ForecastEngine(forecastSource, disclosurePolicy);
   if (forecastSource instanceof SeededForecastSource) {
     process.stderr.write(
       `[forecast] Seeded forecast source active (config/forecast.json, ${forecastSource.seedCount()} ` +
@@ -645,6 +698,7 @@ async function main() {
     );
   }
   const forecastRateLimiter = new RateLimiter();
+  const availabilityRateLimiter = new RateLimiter();
   const replayGuard = new ReplayGuard();
   // Shared commitment store (v0.5 Bloque B) — one instance for the whole process so
   // intents survive across HTTP connections (buildServer runs per-connection). File-backed
@@ -720,7 +774,7 @@ async function main() {
   sweepExpiredIntents(intentStore, ledger);
   setInterval(() => sweepExpiredIntents(intentStore, ledger), INTENT_SWEEP_INTERVAL_MS).unref();
 
-  const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, ledger, replayGuard, intentStore, intentRateLimiter, revokeIntentRateLimiter, metricsRegistry, handoffSink };
+  const deps: ServerDeps = { store, issuer, validator, wellKnown, catalog, pricingStore, rateLimiter, forecastEngine, forecastRateLimiter, availabilityRateLimiter, ledger, replayGuard, intentStore, intentRateLimiter, revokeIntentRateLimiter, metricsRegistry, handoffSink };
 
   // Fase A: --http serves StreamableHTTP on 127.0.0.1 (external bind = infra act, #8/#10).
   // Default remains stdio for MCP-host usage.

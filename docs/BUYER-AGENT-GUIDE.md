@@ -136,6 +136,9 @@ Decode the middle segment (base64url) to get the capability document:
       "label": "Run of Site — Display",
       "consent_context": null,
       "legal_basis_provenance": null,
+      "formats": ["300x250", "728x90", "300x600"],
+      "channel": "display",
+      "properties": ["example.com"],
       "pricing_options": {
         "list_price": 4.5,
         "currency": "EUR",
@@ -149,6 +152,9 @@ Decode the middle segment (base64url) to get the capability document:
 
 `pricing_options` appears only when the publisher has configured a firm list price for the family
 and the price has not expired. Absent `pricing_options` means "no published price" — not "free."
+
+`formats` (creative sizes), `channel` (`display` or `video`) and `properties` (sites) describe what
+the family is, as in a media kit. Each appears only when the publisher has described it.
 
 ### `get_forecast`
 
@@ -166,6 +172,38 @@ and the price has not expired. Absent `pricing_options` means "no published pric
 the publisher's live Google Ad Manager forecast (refreshed every 30 minutes); `synthetic: true`
 means it is generated or pre-loaded data, not a live read. A publisher on live GAM answers only the
 families and periods it has mapped: anything else returns `NOT_FOUND`.
+
+### `check_availability`
+
+Ask whether the publisher can deliver a volume: `family_id`, `period` and `impressions`.
+
+```json
+{
+  "family_id": "display-ros",
+  "period": "2026-10",
+  "requested_impressions": 2800000,
+  "status": "partial",
+  "deliverable_up_to": 2700000,
+  "viewable_up_to": 1300000,
+  "alternatives": [
+    { "family_id": "display-ros", "period": "2026-11", "deliverable_up_to": 3100000, "viewable_up_to": 1500000 }
+  ],
+  "as_of": "2026-10-03T10:30:00.000Z",
+  "valid_for_seconds": 1800,
+  "synthetic": false,
+  "request_id": "..."
+}
+```
+
+`status` is `available` (your volume fits), `partial` (the publisher can offer up to
+`deliverable_up_to`) or `unavailable`. `deliverable_up_to` is the publisher's forecast for this
+product and period, rounded down to 2 significant figures by default (2,784,312 → 2,700,000) —
+a forecast has no unit-level precision. It is an estimate under the product's forecast conditions,
+not a reservation; to commit, use `create_intent`. `viewable_up_to` is the viewable share of that
+volume when the publisher's ad server forecasts it (else `null`). When your volume does not fit,
+`alternatives` lists up to 3 places where it does — other periods of the same family first, then
+other families you have access to; it is empty when your request fits. `as_of` is when the
+forecast was taken; `synthetic` works as in `get_forecast`.
 
 ### `create_intent`
 
@@ -214,8 +252,8 @@ Possible codes:
 | `AUTH_FAILED` | Missing/invalid/revoked token, or the token's buyer is not entitled |
 | `RATE_LIMITED` | Exceeded N=1/T=30s per buyer (identity from token.sub) |
 | `INVALID_REQUEST` | Missing or duplicate `client_request_id`; or a stale/mismatched `price_ref` on `create_intent`; or a `revoke_intent` that matches none of your own active intents |
-| `NOT_FOUND` | `get_forecast` on a live-GAM node for a family or period it does not forecast |
-| `UNAVAILABLE` | `get_forecast` on a live-GAM node whose forecast is not loaded yet or is out of date; retry later |
+| `NOT_FOUND` | `get_forecast` / `check_availability` for a family or period the node does not forecast |
+| `UNAVAILABLE` | `get_forecast` / `check_availability` on a live-GAM node whose forecast is not loaded yet or is out of date; retry later |
 
 Error responses are deliberately opaque: `AUTH_FAILED` covers all denial reasons to prevent
 probing for entitlement structure.

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ErrorCode } from "../errors/envelope.js";
-import { FORECAST_BUCKET } from "../forecast/engine.js";
+import { AVAILABILITY_STATUS, FORECAST_BUCKET } from "../forecast/engine.js";
 
 // Buyer-facing disclosure schemas — the egress gate for every authenticated tool.
 //
@@ -31,6 +31,9 @@ const buyerFacingFamily = z
     consent_context: reservedNull,
     legal_basis_provenance: reservedNull,
     pricing_options: pricingOptions.optional(),
+    formats: z.array(z.string().regex(/^\d+x\d+$/)).optional(),
+    channel: z.enum(["display", "video"]).optional(),
+    properties: z.array(z.string()).optional(),
   })
   .strict();
 
@@ -48,6 +51,33 @@ export const ForecastDisclosure = z
     bucket: z.enum(Object.values(FORECAST_BUCKET) as [string, ...string[]]),
     bucket_label: z.string(),
     ttl_seconds: z.number(),
+    synthetic: z.boolean(),
+    consent_context: reservedNull,
+    legal_basis_provenance: reservedNull,
+    request_id: z.string(),
+  })
+  .strict();
+
+export const CheckAvailabilityDisclosure = z
+  .object({
+    family_id: z.string(),
+    period: z.string(),
+    requested_impressions: z.number(),
+    status: z.enum(Object.values(AVAILABILITY_STATUS) as [string, ...string[]]),
+    deliverable_up_to: z.number(),
+    viewable_up_to: z.number().nullable(),
+    alternatives: z.array(
+      z
+        .object({
+          family_id: z.string(),
+          period: z.string(),
+          deliverable_up_to: z.number(),
+          viewable_up_to: z.number().nullable(),
+        })
+        .strict()
+    ),
+    as_of: z.string().nullable(),
+    valid_for_seconds: z.number(),
     synthetic: z.boolean(),
     consent_context: reservedNull,
     legal_basis_provenance: reservedNull,

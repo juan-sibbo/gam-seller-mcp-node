@@ -351,6 +351,35 @@ bucket. Buyers are answered from that snapshot (`synthetic: false`); a buyer req
 triggers a GAM call. A family missing from `gam.json` or a period outside the snapshot returns
 `NOT_FOUND`.
 
+**How volumes are presented (`check_availability`).** Buyers see your forecast for the product and
+period, rounded down to 2 significant figures by default (2,784,312 → 2,700,000): a forecast has no
+unit-level precision, and rounding down means the node never offers more than GAM forecasts. Adjust
+it in the optional `disclosure` block of `gam.json` (or `forecast.json`):
+
+```json
+"disclosure": { "significant_figures": 2, "haircut": 1, "min_quantity": 0 }
+```
+
+- `significant_figures` — precision, 1 to 6. Default 2.
+- `haircut` — fraction of the forecast you offer, (0, 1]. Default 1; lower it if your forecasts are
+  volatile and you would rather not promise the full figure.
+- `min_quantity` — below this, the answer is `unavailable`. Default 0.
+- `ladder` — instead of `significant_figures`, present volumes in coarser steps, e.g. `[1, 2, 5]` for
+  1k, 2k, 5k, 10k… Only if you prefer to show less; it is your commercial choice.
+
+Other GAM figures — matched, possible and reserved units, which reflect other buyers' bookings —
+are never used, and the audit ledger records the decision, not volumes.
+
+**Describe your families like a media kit.** In `catalog.json`, each family can carry `formats`
+(creative sizes, e.g. `"300x250"`), `channel` (`"display"` or `"video"`) and `properties` (the
+domains it runs on). They are shown to buyers in `discover_products`. With `gam.json`, families that
+omit `formats` / `channel` take them from their forecast targeting; what you write in
+`catalog.json` wins. Malformed values stop the boot.
+
+**Forecast conditions.** GAM's availability depends on the prospective line item: dates, sizes,
+ad units, environment and priority. Mirror how the product is really sold — set `priority` (6–10,
+STANDARD line items) on a family when it is not sold at GAM's default priority.
+
 > **WSL2 note.** If the log shows `fetch failed (ETIMEDOUT)` while other tools reach Google fine,
 > Node's IPv4/IPv6 fallback is giving up too early. Start the node with
 > `NODE_OPTIONS=--network-family-autoselection-attempt-timeout=2000`.

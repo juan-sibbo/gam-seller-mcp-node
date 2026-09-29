@@ -34,12 +34,20 @@ Buyer agent
     │
     ├── discover_products         ← What can I buy here, and at what firm price?
     │       Returns: product families the buyer is entitled to see (e.g. "Pre-Roll Video"),
-    │               each with its firm list price when the publisher has configured one.
+    │               each with its formats, channel and sites, and its firm list price
+    │               when the publisher has configured them.
     │       Never returns: deal IDs, internal IDs, raw inventory, exact per-impression pricing.
     │
     ├── get_forecast              ← How available is this family next quarter?
     │       Returns: Low / Mid / High availability bucket.
     │       Never returns: exact impression counts, CPM curves, floor prices.
+    │
+    ├── check_availability        ← Can you deliver 2.8M impressions of this family in October?
+    │       Returns: available / partial (up to ~2.7M, ~1.3M viewable) / unavailable, as of the
+    │       last forecast — and, when it does not fit, where it would ("November: 3.1M").
+    │       Volumes come from the forecast rounded down to 2 significant figures
+    │       (configurable by the publisher).
+    │       Never returns: other buyers' bookings, floor prices, audience data.
     │
     ├── create_intent             ← Commit to a product at its current firm price (with TTL).
     │       Records a firm, time-boxed buying intent — rejected if the price is stale or
@@ -231,7 +239,7 @@ until it is declared on purpose.
 |----------|--------------|-------------|--------------|-------------------|
 | Raw GAM API | Everything in the account | Full CRUD | Logging only | Poor (SOAP/REST, no MCP) |
 | OpenRTB bid requests | User-level data, floor prices | Bid-only | None | Poor |
-| **This server** | Coarse families + bucket forecasts | Buyer's own soft commitment only (no GAM writes) | Hash-chained ledger | Native MCP |
+| **This server** | Families + availability checks from the live forecast | Buyer's own soft commitment only (no GAM writes) | Hash-chained ledger | Native MCP |
 
 ## Current status
 

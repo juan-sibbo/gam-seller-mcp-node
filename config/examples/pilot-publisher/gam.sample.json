@@ -3,10 +3,37 @@
   "network_code": "12345678",
   "service_account_key_path": "/secure/gam-seller-node/service-account.json",
   "api_version": "v202608",
-  "thresholds": { "mid": 2000000, "high": 20000000 },
+  "thresholds": {
+    "mid": 2000000,
+    "high": 20000000
+  },
   "families": {
-    "display-ros": { "sizes": ["300x250", "728x90", "300x600"] },
-    "video-pre-roll": { "sizes": ["640x480"], "environment": "VIDEO_PLAYER" },
-    "native-feed": { "sizes": ["1x1"], "ad_unit_ids": ["21700000000"] }
+    "display-ros": {
+      "sizes": [
+        "300x250",
+        "728x90",
+        "300x600"
+      ],
+      "priority": 8
+    },
+    "video-pre-roll": {
+      "sizes": [
+        "640x480"
+      ],
+      "environment": "VIDEO_PLAYER"
+    },
+    "native-feed": {
+      "sizes": [
+        "1x1"
+      ],
+      "ad_unit_ids": [
+        "21700000000"
+      ]
+    }
+  },
+  "disclosure": {
+    "significant_figures": 2,
+    "haircut": 1,
+    "min_quantity": 0
   }
 }

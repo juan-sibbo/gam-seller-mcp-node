@@ -30,6 +30,10 @@ export interface BuyerFacingFamily {
   // Present ONLY when a firm list price is available. Uniform list price only — per-buyer /
   // exact / deal pricing stays denied (SEC-GATE-13 / EXACT_PRICING denylist, DP-AB-01 §5.1).
   pricing_options?: BuyerPricingOptions;
+  // Media-kit description, present only when configured (catalog.json) or derived (gam.json).
+  formats?: string[];
+  channel?: "display" | "video";
+  properties?: string[];
 }
 
 // Project a catalog family (+ optional firm price) to the buyer-facing shape. Copies fields
@@ -41,6 +45,9 @@ export function projectFamily(family: ProductFamily, price?: FamilyPrice): Buyer
     consent_context: null,
     legal_basis_provenance: null,
   };
+  if (family.formats) projected.formats = [...family.formats];
+  if (family.channel) projected.channel = family.channel;
+  if (family.properties) projected.properties = [...family.properties];
   if (price) {
     projected.pricing_options = {
       list_price: price.list_price,
