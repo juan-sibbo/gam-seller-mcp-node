@@ -18,6 +18,7 @@ Exit 0 on success, 1 on any assertion failure.
 
 import json
 import sys
+import uuid
 from typing import Any
 
 try:
@@ -266,7 +267,9 @@ def run_probe(base_url: str) -> None:
         {
             "jsonrpc": "2.0",
             "method": "tools/call",
-            "params": {"name": "discover_products", "arguments": {}},
+            # Carries an idempotency key (required by default since v0.9.0) so the call reaches
+            # the auth gate and this step exercises Default-Deny, not the missing-key reject.
+            "params": {"name": "discover_products", "arguments": {"client_request_id": str(uuid.uuid4())}},
             "id": 3,
         },
         session_id=session_id,
@@ -289,6 +292,32 @@ def run_probe(base_url: str) -> None:
                 fail("deny response parse", deny_text[:100])
         else:
             fail("Default-Deny", "expected isError=true for a call with no token, got success")
+
+    # ── 6: SEC-GATE-3 — no idempotency key → INVALID_REQUEST (default posture) ─
+    # v0.9.0: client_request_id is required by default, checked before auth, so a call that
+    # omits it is refused with the generic INVALID_REQUEST whatever else it carries.
+    print("6. SEC-GATE-3: no client_request_id → INVALID_REQUEST …")
+    _, nokey_parsed, _ = _mcp_post(
+        base_url + MCP_PATH,
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {"name": "discover_products", "arguments": {}},
+            "id": 4,
+        },
+        session_id=session_id,
+    )
+    nokey_result = (nokey_parsed or {}).get("result") or {}
+    nokey_content = nokey_result.get("content", [{}])
+    nokey_text = nokey_content[0].get("text", "") if nokey_content else ""
+    try:
+        nokey_code = json.loads(nokey_text).get("code", "") if nokey_result.get("isError") else "<success>"
+    except json.JSONDecodeError:
+        nokey_code = "<unparseable>"
+    if nokey_code == "INVALID_REQUEST":
+        ok("INVALID_REQUEST received for a call without an idempotency key (SEC-GATE-3 ✓)")
+    else:
+        fail("idempotency key", f"expected INVALID_REQUEST, got {nokey_code!r}")
 
     _report(failures)
 
