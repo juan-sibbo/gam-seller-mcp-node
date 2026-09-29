@@ -34,7 +34,8 @@ Buyer agent
     │
     ├── discover_products         ← What can I buy here, and at what firm price?
     │       Returns: product families the buyer is entitled to see (e.g. "Pre-Roll Video"),
-    │               each with its firm list price when the publisher has configured one.
+    │               each with its formats, channel and sites, and its firm list price
+    │               when the publisher has configured them.
     │       Never returns: deal IDs, internal IDs, raw inventory, exact per-impression pricing.
     │
     ├── get_forecast              ← How available is this family next quarter?
@@ -42,7 +43,8 @@ Buyer agent
     │       Never returns: exact impression counts, CPM curves, floor prices.
     │
     ├── check_availability        ← Can you deliver 2.8M impressions of this family in October?
-    │       Returns: available / partial (up to ~2.7M) / unavailable, as of the last forecast.
+    │       Returns: available / partial (up to ~2.7M, ~1.3M viewable) / unavailable, as of the
+    │       last forecast — and, when it does not fit, where it would ("November: 3.1M").
     │       Volumes come from the forecast rounded down to 2 significant figures
     │       (configurable by the publisher).
     │       Never returns: other buyers' bookings, floor prices, audience data.

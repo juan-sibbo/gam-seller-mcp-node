@@ -420,7 +420,7 @@ function buildServer(deps: ServerDeps): McpServer {
   // outbound call on the request path. Z3: inventory-level data only.
   guardedTool<{ family_id: string; period: string; impressions: number; token?: string; client_request_id?: string }>(
     "check_availability",
-    "Check whether the publisher can deliver a number of impressions of a product family in a period. Returns available, partial (with the volume it can offer) or unavailable. Figures are forecast estimates, rounded down (2 significant figures by default), not reservations.",
+    "Check whether the publisher can deliver a number of impressions of a product family in a period. Returns available, partial (with the volume it can offer) or unavailable, the viewable share when forecast, and — if the volume does not fit — up to 3 alternative periods or families where it does. Figures are forecast estimates, rounded down (2 significant figures by default), not reservations.",
     {
       family_id: z.string().describe("Product family ID from discover_products"),
       period: z.string().describe("Target period (e.g. 2026-10, Q4-2026)"),
@@ -433,14 +433,16 @@ function buildServer(deps: ServerDeps): McpServer {
     async ({ family_id, period, impressions }, { buyer_id, request_id }) => {
       let result;
       try {
-        result = await forecastEngine.checkAvailability(family_id, period, impressions);
+        // Alternatives only ever name families this buyer is entitled to see.
+        const entitled = new Set(catalog.discover(buyer_id).map((f) => f.family_id));
+        result = await forecastEngine.checkAvailability(family_id, period, impressions, entitled);
       } catch (err) {
         return forecastErrorResult(err, MetricTool.CHECK_AVAILABILITY, request_id);
       }
       // Minimized like FORECAST_REQUEST: status + coarse identifiers, no volumes.
       ledger.append(
         EventClass.FORECAST_REQUEST,
-        { kind: "availability_check", family_id, period, status: result.status, synthetic: result.synthetic },
+        { kind: "availability_check", family_id, period, status: result.status, alternatives: result.alternatives.length, synthetic: result.synthetic },
         { buyer_id, request_id }
       );
       recordOutcome(MetricTool.CHECK_AVAILABILITY, ToolOutcome.SUCCESS);
@@ -646,7 +648,7 @@ async function main() {
   // DSR overlay is applied on top, so restrictions/erasures exercised via the DSR CLI are
   // enforced from boot (and a corrupt overlay also fails closed).
   const store = new EntitlementStore(loadEntitlementsFromFile(), DEV_DSR_STATE_PATH);
-  const catalog = loadCatalogFromFile();
+  const baseCatalog = loadCatalogFromFile();
   // Fail-closed: loadPricingFromFile throws on missing/unparseable valid_until (D7).
   const pricingStore = loadPricingFromFile();
   // Atomic deploy boundary (C-02): if the operator declared a real deployment
@@ -683,6 +685,9 @@ async function main() {
   const gamSource = loadGamForecastSourceFromFile();
   const forecastSource: ForecastSource = gamSource ?? loadForecastSourceFromFile();
   if (gamSource) await startGamRefresh(gamSource);
+  // With a live GAM source, families without formats/channel in catalog.json take them from their
+  // forecast targeting, so discover_products describes what the buyer is forecasting.
+  const catalog = gamSource ? baseCatalog.withMediaKitDefaults(gamSource.mediaKitHints()) : baseCatalog;
   const disclosurePolicy = loadDisclosurePolicyFromFile();
   const forecastEngine = new ForecastEngine(forecastSource, disclosurePolicy);
   if (forecastSource instanceof SeededForecastSource) {

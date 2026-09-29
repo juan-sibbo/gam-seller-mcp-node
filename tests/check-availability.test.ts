@@ -60,7 +60,7 @@ const fixedSource = (units: number, live = true): ForecastSource => ({
     return "low";
   },
   async getAvailability() {
-    return { units, asOf: Date.UTC(2026, 9, 3, 10, 30) };
+    return { units, viewableUnits: null, asOf: Date.UTC(2026, 9, 3, 10, 30) };
   },
 });
 
@@ -205,7 +205,7 @@ describe("GAM source — availability estimate and product-shaped prospective li
   };
   const NOW = Date.UTC(2026, 9, 15, 10, 0, 0);
 
-  it("keeps the raw estimate in the snapshot and serves it with its timestamp", async () => {
+  it("serves the snapshot estimate with its timestamp", async () => {
     const client = new GamSoapClient({ networkCode: "12345678", apiVersion: "v202608", applicationName: "t" }, { getAccessToken: async () => "t" }, fetchImpl);
     const source = new GamForecastSource(
       client,
@@ -213,7 +213,7 @@ describe("GAM source — availability estimate and product-shaped prospective li
       () => NOW
     );
     await source.refresh();
-    expect(await source.getAvailability("display-ros", "2026-10")).toEqual({ units: 2_780_000, asOf: NOW });
+    expect(await source.getAvailability("display-ros", "2026-10")).toEqual({ units: 2_780_000, viewableUnits: null, asOf: NOW });
     const result = await new ForecastEngine(source).checkAvailability("display-ros", "2026-10", 2_800_000);
     expect(result).toMatchObject({ status: "partial", deliverable_up_to: 2_700_000, synthetic: false });
   });

@@ -9,6 +9,34 @@ export interface ProductFamily {
   label: string;
   consent_context: null;
   legal_basis_provenance: null;
+  // Optional media-kit description of the family — what a buyer needs to know what it buys.
+  formats?: string[];                // creative sizes, e.g. "300x250"
+  channel?: MediaChannel;
+  properties?: string[];             // sites (domains) the family runs on
+}
+
+export type MediaChannel = "display" | "video";
+const CHANNELS: ReadonlySet<string> = new Set(["display", "video"]);
+const FORMAT_RE = /^\d+x\d+$/;
+const DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
+
+export interface MediaKitHint {
+  formats: string[];
+  channel: MediaChannel;
+}
+
+// Media-kit fields are buyer-facing, so a malformed value stops the boot instead of travelling.
+function validateMediaKit(f: ProductFamily): void {
+  const where = `[catalog] catalog.json family ${f.family_id}`;
+  if (f.formats !== undefined && (!Array.isArray(f.formats) || !f.formats.every((x) => typeof x === "string" && FORMAT_RE.test(x)))) {
+    throw new Error(`${where}: formats must be sizes like "300x250".`);
+  }
+  if (f.channel !== undefined && !CHANNELS.has(f.channel)) {
+    throw new Error(`${where}: channel must be "display" or "video".`);
+  }
+  if (f.properties !== undefined && (!Array.isArray(f.properties) || !f.properties.every((x) => typeof x === "string" && DOMAIN_RE.test(x)))) {
+    throw new Error(`${where}: properties must be domain names like "example.com".`);
+  }
 }
 
 interface CatalogConfig {
@@ -24,6 +52,7 @@ export class CatalogStore {
   private readonly buyerAccess: Map<string, ReadonlySet<string>>;
 
   constructor(config: CatalogConfig) {
+    config.families.forEach(validateMediaKit);
     this.families = new Map(config.families.map((f) => [f.family_id, f]));
     this.buyerAccess = new Map(
       Object.entries(config.buyer_access).map(([buyerId, ids]) => [
@@ -43,6 +72,18 @@ export class CatalogStore {
 
   familyCount(): number {
     return this.families.size;
+  }
+
+  // New store where families lacking formats/channel take them from the forecast targeting
+  // (gam.json). Values written in catalog.json always win.
+  withMediaKitDefaults(hints: ReadonlyMap<string, MediaKitHint>): CatalogStore {
+    const families = [...this.families.values()].map((f) => {
+      const hint = hints.get(f.family_id);
+      if (!hint) return f;
+      return { ...f, formats: f.formats ?? hint.formats, channel: f.channel ?? hint.channel };
+    });
+    const buyer_access = Object.fromEntries([...this.buyerAccess].map(([buyer, ids]) => [buyer, [...ids]]));
+    return new CatalogStore({ families, buyer_access });
   }
 }
 

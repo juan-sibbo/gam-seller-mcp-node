@@ -10,7 +10,10 @@ import {
   validateThresholds,
   type ForecastThresholds,
 } from "./seeded-source.js";
-import { ForecastUnavailableError, type AvailabilityEstimate, type ForecastSource } from "./source.js";
+import { ForecastUnavailableError, type AvailabilityEstimate, type ForecastSource, type ListedAvailability } from "./source.js";
+import { compareDates, parsePeriod, type DateParts, type PeriodRange } from "./period.js";
+
+export { parsePeriod, type DateParts, type PeriodRange };
 
 export { ForecastUnavailableError };
 
@@ -72,47 +75,6 @@ export interface GamForecastSourceConfig {
   periods?: string[]; // absent → rolling window recomputed each cycle
 }
 
-
-export interface DateParts {
-  year: number;
-  month: number;
-  day: number;
-}
-
-export interface PeriodRange {
-  start: DateParts;
-  end: DateParts; // inclusive last day
-}
-
-function lastDayOfMonth(year: number, month: number): number {
-  return new Date(Date.UTC(year, month, 0)).getUTCDate();
-}
-
-// "2026-10" → October 2026; "Q4-2026" (or "2026-Q4") → Oct–Dec 2026. Anything else → null.
-export function parsePeriod(period: string): PeriodRange | null {
-  const month = period.match(/^(\d{4})-(0[1-9]|1[0-2])$/);
-  if (month) {
-    const year = Number(month[1]);
-    const m = Number(month[2]);
-    return { start: { year, month: m, day: 1 }, end: { year, month: m, day: lastDayOfMonth(year, m) } };
-  }
-  const quarterFirst = period.match(/^Q([1-4])-(\d{4})$/i);
-  const yearFirst = period.match(/^(\d{4})-Q([1-4])$/i);
-  if (quarterFirst || yearFirst) {
-    const q = Number(quarterFirst ? quarterFirst[1] : yearFirst![2]);
-    const year = Number(quarterFirst ? quarterFirst[2] : yearFirst![1]);
-    const first = (q - 1) * 3 + 1;
-    return {
-      start: { year, month: first, day: 1 },
-      end: { year, month: first + 2, day: lastDayOfMonth(year, first + 2) },
-    };
-  }
-  return null;
-}
-
-function compareDates(a: DateParts, b: DateParts): number {
-  return a.year - b.year || a.month - b.month || a.day - b.day;
-}
 
 // Calendar date "now" in the network's timezone.
 export function todayIn(timeZone: string, now: Date): DateParts {
@@ -199,6 +161,7 @@ interface NetworkInfo {
 interface SnapshotEntry {
   bucket: ForecastBucket;
   available: number; // availableUnits as GAM returned it; rounded by the disclosure policy before reaching a buyer
+  viewable: number | null; // availableUnits of the VIEWABLE_IMPRESSIONS alternative forecast, when GAM returns it
   fetchedAt: number;
 }
 
@@ -214,6 +177,16 @@ function describeError(err: unknown): string {
   if (!(err instanceof Error)) return String(err);
   const cause = (err as { cause?: { code?: unknown } }).cause;
   return typeof cause?.code === "string" ? `${err.message} (${cause.code})` : err.message;
+}
+
+// Viewable availability from the forecast's alternativeUnitTypeForecasts block, if present.
+export function viewableAvailable(xml: string): number | null {
+  for (const block of xml.match(/<(?:[\w-]+:)?alternativeUnitTypeForecasts>[\s\S]*?<\/(?:[\w-]+:)?alternativeUnitTypeForecasts>/g) ?? []) {
+    if (firstTagText(block, "unitType") !== "VIEWABLE_IMPRESSIONS") continue;
+    const units = Number(firstTagText(block, "availableUnits"));
+    return Number.isFinite(units) ? units : null;
+  }
+  return null;
 }
 
 function seedKey(family_id: string, period: string): string {
@@ -238,7 +211,31 @@ export class GamForecastSource implements ForecastSource {
 
   async getAvailability(family_id: string, period: string): Promise<AvailabilityEstimate> {
     const entry = this.freshEntry(family_id, period);
-    return { units: entry.available, asOf: entry.fetchedAt };
+    return { units: entry.available, viewableUnits: entry.viewable, asOf: entry.fetchedAt };
+  }
+
+  async listAvailability(): Promise<ListedAvailability[]> {
+    const fresh: ListedAvailability[] = [];
+    for (const [key, entry] of this.snapshot) {
+      if (this.now() - entry.fetchedAt > GAM_MAX_STALENESS_MS) continue;
+      const [family_id, period] = JSON.parse(key) as [string, string];
+      fresh.push({ family_id, period, estimate: { units: entry.available, viewableUnits: entry.viewable, asOf: entry.fetchedAt } });
+    }
+    return fresh;
+  }
+
+  // Formats and channel per family, derived from the forecast targeting — lets discover_products
+  // describe a family without the publisher repeating it in catalog.json.
+  mediaKitHints(): Map<string, { formats: string[]; channel: "display" | "video" }> {
+    return new Map(
+      [...this.config.families].map(([family_id, t]) => [
+        family_id,
+        {
+          formats: t.sizes.map((s) => `${s.width}x${s.height}`),
+          channel: t.environment === "VIDEO_PLAYER" ? ("video" as const) : ("display" as const),
+        },
+      ])
+    );
   }
 
   private freshEntry(family_id: string, period: string): SnapshotEntry {
@@ -292,6 +289,7 @@ export class GamForecastSource implements ForecastSource {
           this.snapshot.set(seedKey(family_id, period), {
             bucket: bucketForImpressions(available, this.config.thresholds),
             available,
+            viewable: viewableAvailable(xml),
             fetchedAt: this.now(),
           });
           report.ok++;

@@ -31,6 +31,9 @@ const buyerFacingFamily = z
     consent_context: reservedNull,
     legal_basis_provenance: reservedNull,
     pricing_options: pricingOptions.optional(),
+    formats: z.array(z.string().regex(/^\d+x\d+$/)).optional(),
+    channel: z.enum(["display", "video"]).optional(),
+    properties: z.array(z.string()).optional(),
   })
   .strict();
 
@@ -62,6 +65,17 @@ export const CheckAvailabilityDisclosure = z
     requested_impressions: z.number(),
     status: z.enum(Object.values(AVAILABILITY_STATUS) as [string, ...string[]]),
     deliverable_up_to: z.number(),
+    viewable_up_to: z.number().nullable(),
+    alternatives: z.array(
+      z
+        .object({
+          family_id: z.string(),
+          period: z.string(),
+          deliverable_up_to: z.number(),
+          viewable_up_to: z.number().nullable(),
+        })
+        .strict()
+    ),
     as_of: z.string().nullable(),
     valid_for_seconds: z.number(),
     synthetic: z.boolean(),

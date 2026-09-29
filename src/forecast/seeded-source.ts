@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { operatorConfigDir } from "../config/resolve.js";
 import { FORECAST_BUCKET, SyntheticForecastSource, type ForecastBucket } from "./engine.js";
-import type { AvailabilityEstimate, ForecastSource } from "./source.js";
+import type { AvailabilityEstimate, ForecastSource, ListedAvailability } from "./source.js";
 
 // SeededForecastSource — a GAM-less forecast source seeded from operator-provided data (a
 // ONE-TIME GAM report export, NOT the live ForecastService/SOAP API). It lets a pilot run on the
@@ -89,11 +89,18 @@ export class SeededForecastSource implements ForecastSource {
   // Seeded count when present; otherwise (unseeded, or seeded as a literal bucket) the fallback's.
   async getAvailability(family_id: string, period: string): Promise<AvailabilityEstimate> {
     const units = this.units.get(seedKey(family_id, period));
-    if (units !== undefined) return { units, asOf: null };
+    if (units !== undefined) return { units, viewableUnits: null, asOf: null };
     if (!this.fallback.getAvailability) {
       throw new Error("seeded forecast: no impression count for this pair and the fallback cannot estimate one");
     }
     return this.fallback.getAvailability(family_id, period);
+  }
+
+  async listAvailability(): Promise<ListedAvailability[]> {
+    return [...this.units].map(([key, units]) => {
+      const [family_id, period] = JSON.parse(key) as [string, string];
+      return { family_id, period, estimate: { units, viewableUnits: null, asOf: null } };
+    });
   }
 
   // Number of (family_id, period) pairs actually seeded — used for boot logging / tests.

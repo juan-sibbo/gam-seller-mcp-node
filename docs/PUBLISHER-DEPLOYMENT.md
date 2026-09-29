@@ -370,6 +370,12 @@ it in the optional `disclosure` block of `gam.json` (or `forecast.json`):
 Other GAM figures — matched, possible and reserved units, which reflect other buyers' bookings —
 are never used, and the audit ledger records the decision, not volumes.
 
+**Describe your families like a media kit.** In `catalog.json`, each family can carry `formats`
+(creative sizes, e.g. `"300x250"`), `channel` (`"display"` or `"video"`) and `properties` (the
+domains it runs on). They are shown to buyers in `discover_products`. With `gam.json`, families that
+omit `formats` / `channel` take them from their forecast targeting; what you write in
+`catalog.json` wins. Malformed values stop the boot.
+
 **Forecast conditions.** GAM's availability depends on the prospective line item: dates, sizes,
 ad units, environment and priority. Mirror how the product is really sold — set `priority` (6–10,
 STANDARD line items) on a family when it is not sold at GAM's default priority.

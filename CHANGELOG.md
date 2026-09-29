@@ -19,6 +19,13 @@
   floors, deals and audience data; the ledger records the decision, not volumes.
 - **Product-shaped forecasts:** `gam.json` families accept `priority` (6–10), sent on the
   prospective line item, because GAM availability is conditioned on it.
+- **Viewable impressions:** `viewable_up_to`, from the viewable forecast GAM returns alongside the
+  total (rounded the same way); `null` when the source does not forecast it.
+- **Alternatives:** when the volume does not fit, up to 3 family × period pairs where it does —
+  same family first, then other families the buyer is entitled to — from the same snapshot.
+- **Media kit in `discover_products`:** optional `formats`, `channel` and `properties` per family in
+  `catalog.json`; with `gam.json`, formats and channel are filled from the forecast targeting.
+  Validated at load (malformed values stop the boot).
 
 ## [0.10.0] — 2026-09-29 — live GAM forecast
 

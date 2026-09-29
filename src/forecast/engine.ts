@@ -5,7 +5,8 @@
 // Rate limit: N=1/T=30s per buyer_id applied in server.ts (same class as discover_products).
 
 import { DEFAULT_DISCLOSURE_POLICY, quantizeAvailability, type DisclosurePolicy } from "./disclosure-policy.js";
-import type { AvailabilityEstimate, ForecastSource } from "./source.js";
+import { parsePeriod } from "./period.js";
+import type { AvailabilityEstimate, ForecastSource, ListedAvailability } from "./source.js";
 
 // Bucket values — s5-forecast-demo-mode-authorization §bucket-ranges (placeholder for demo).
 // Production ranges are [[por definir]] pending pilot publisher inventory data (blocker #6).
@@ -48,12 +49,25 @@ export type AvailabilityStatus = (typeof AVAILABILITY_STATUS)[keyof typeof AVAIL
 // check_availability result. `deliverable_up_to` is the publisher's commercial availability: the
 // forecast estimate rounded down by the disclosure policy (default 2 significant figures). It is an
 // estimate under the product's forecast conditions, not a reservation.
+// A family × period where the requested volume does fit — suggested when the request does not.
+export interface AvailabilityAlternative {
+  family_id: string;
+  period: string;
+  deliverable_up_to: number;
+  viewable_up_to: number | null;
+}
+
+// Alternatives are capped so the answer stays a short, actionable list.
+export const MAX_ALTERNATIVES = 3;
+
 export interface AvailabilityResult {
   family_id: string;
   period: string;
   requested_impressions: number;
   status: AvailabilityStatus;
   deliverable_up_to: number;
+  viewable_up_to: number | null; // viewable impressions within deliverable_up_to, when forecast
+  alternatives: AvailabilityAlternative[]; // empty when the request fits
   as_of: string | null;
   valid_for_seconds: number;
   synthetic: boolean;
@@ -81,11 +95,13 @@ export class SyntheticForecastSource implements ForecastSource {
 
   // Deterministic illustrative volumes for the demo (labeled synthetic: true downstream).
   async getAvailability(family_id: string, period: string): Promise<AvailabilityEstimate> {
-    return { units: SYNTHETIC_UNITS[syntheticHash(family_id + period) % SYNTHETIC_UNITS.length]!, asOf: null };
+    const units = SYNTHETIC_UNITS[syntheticHash(family_id + period) % SYNTHETIC_UNITS.length]!;
+    return { units, viewableUnits: Math.floor(units * SYNTHETIC_VIEWABLE_RATE), asOf: null };
   }
 }
 
 const SYNTHETIC_UNITS = [180_000, 950_000, 2_600_000, 8_300_000, 24_000_000];
+const SYNTHETIC_VIEWABLE_RATE = 0.55;
 
 function syntheticHash(seed: string): number {
   let hash = 0;
@@ -120,24 +136,72 @@ export class ForecastEngine {
   }
 
   // "Can you deliver `requested` impressions of this family in this period?" The estimate is rounded
-  // by the publisher's disclosure policy before the decision is taken.
-  async checkAvailability(family_id: string, period: string, requested: number): Promise<AvailabilityResult> {
+  // by the publisher's disclosure policy before the decision is taken. When the request does not
+  // fit, suggests where it would: other periods of the same family first, then other families —
+  // restricted to `allowedFamilies` (the buyer's entitled families) when given.
+  async checkAvailability(
+    family_id: string,
+    period: string,
+    requested: number,
+    allowedFamilies?: ReadonlySet<string>
+  ): Promise<AvailabilityResult> {
     if (!this.source.getAvailability) {
       throw new Error("forecast source does not support availability checks");
     }
     const estimate = await this.source.getAvailability(family_id, period);
     const commercial = quantizeAvailability(estimate.units, this.policy);
+    const status = decideAvailability(commercial, requested);
+    const alternatives =
+      status === AVAILABILITY_STATUS.AVAILABLE
+        ? []
+        : await this.findAlternatives(family_id, period, requested, allowedFamilies);
     return {
       family_id,
       period,
       requested_impressions: requested,
-      status: decideAvailability(commercial, requested),
+      status,
       deliverable_up_to: commercial,
+      viewable_up_to: this.viewable(estimate),
+      alternatives,
       as_of: estimate.asOf === null ? null : new Date(estimate.asOf).toISOString(),
       valid_for_seconds: FORECAST_TTL_SECONDS,
       synthetic: this.source.live !== true,
       consent_context: null,
       legal_basis_provenance: null,
     };
+  }
+
+  private viewable(estimate: AvailabilityEstimate): number | null {
+    return estimate.viewableUnits === null ? null : quantizeAvailability(estimate.viewableUnits, this.policy);
+  }
+
+  private async findAlternatives(
+    family_id: string,
+    period: string,
+    requested: number,
+    allowedFamilies?: ReadonlySet<string>
+  ): Promise<AvailabilityAlternative[]> {
+    if (!this.source.listAvailability) return [];
+    const periodStart = (p: string) => {
+      const r = parsePeriod(p);
+      return r ? r.start.year * 10_000 + r.start.month * 100 + r.start.day : Number.MAX_SAFE_INTEGER;
+    };
+    const candidates = (await this.source.listAvailability())
+      .filter((c: ListedAvailability) => !(c.family_id === family_id && c.period === period))
+      .filter((c) => allowedFamilies === undefined || allowedFamilies.has(c.family_id))
+      .map((c) => ({ c, commercial: quantizeAvailability(c.estimate.units, this.policy) }))
+      .filter(({ commercial }) => commercial >= requested);
+    candidates.sort(
+      (a, b) =>
+        Number(b.c.family_id === family_id) - Number(a.c.family_id === family_id) ||
+        periodStart(a.c.period) - periodStart(b.c.period) ||
+        a.c.family_id.localeCompare(b.c.family_id)
+    );
+    return candidates.slice(0, MAX_ALTERNATIVES).map(({ c, commercial }) => ({
+      family_id: c.family_id,
+      period: c.period,
+      deliverable_up_to: commercial,
+      viewable_up_to: this.viewable(c.estimate),
+    }));
   }
 }
