@@ -310,7 +310,7 @@ connection:
 ```
 MCP_CONFIG_DIR=/etc/gam-seller/config    # your real deployment/catalog/entitlements/pricing(+forecast).json
 MCP_REQUIRE_OPERATOR_CONFIG=1            # refuse to boot on the bundled demo example (no accidental demo in prod)
-MCP_REQUIRE_IDEMPOTENCY_KEY=1            # every authenticated request must carry client_request_id (closes replay bypass #82)
+# MCP_REQUIRE_IDEMPOTENCY_KEY=0          # default: required. Set 0 ONLY for legacy clients — reopens the replay bypass (#82)
 MCP_ANCHOR_SINK=tsa                      # anchor the audit head-hash to an RFC 3161 timestamp authority (third-party tamper-evidence)
 MCP_INTENT_HANDOFF=file                  # close the handoff loop to your sales rails
 ```

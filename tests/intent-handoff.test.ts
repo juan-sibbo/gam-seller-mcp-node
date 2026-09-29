@@ -142,6 +142,7 @@ async function setup(handoffSink: HandoffSink): Promise<Ctx> {
     forecastRateLimiter: new RateLimiter(),
     ledger: createMemoryLedger(),
     replayGuard: new ReplayGuard(),
+    requireIdempotencyKey: false, // not exercising SEC-GATE-3 — see idempotency-required.test.ts
     intentStore: new IntentStore(),
     metricsRegistry: metrics,
     handoffSink,

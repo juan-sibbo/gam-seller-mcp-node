@@ -51,7 +51,7 @@ const token = process.env.SELLER_MCP_BUYER_TOKEN;  // provisioned out of band
 // 2. Discover available product families
 const disc = await client.callTool({
   name: "discover_products",
-  arguments: { token },
+  arguments: { token, client_request_id: crypto.randomUUID() },  // idempotency key: required
 });
 const { families } = JSON.parse(disc.content[0].text);
 // families: [{ family_id, label, pricing_options? }, ...]
@@ -64,6 +64,7 @@ for (const family of families) {
       token,
       family_id: family.family_id,
       period: "2026-Q4",
+      client_request_id: crypto.randomUUID(),
     },
   });
   const { bucket } = JSON.parse(fc.content[0].text);
@@ -210,14 +211,15 @@ Possible codes:
 |------|---------|
 | `AUTH_FAILED` | Missing/invalid/revoked token, or the token's buyer is not entitled |
 | `RATE_LIMITED` | Exceeded N=1/T=30s per buyer (identity from token.sub) |
-| `INVALID_REQUEST` | Replay detected (duplicate client_request_id); or a stale/mismatched `price_ref` on `create_intent`; or a `revoke_intent` that matches none of your own active intents |
+| `INVALID_REQUEST` | Missing or duplicate `client_request_id`; or a stale/mismatched `price_ref` on `create_intent`; or a `revoke_intent` that matches none of your own active intents |
 
 Error responses are deliberately opaque: `AUTH_FAILED` covers all denial reasons to prevent
 probing for entitlement structure.
 
 ## Replay protection
 
-To use the replay-detection feature, include a `client_request_id` in your tool call arguments:
+Every authenticated call must carry a `client_request_id` (the node rejects calls without one
+unless its operator has explicitly opted out):
 
 ```typescript
 await client.callTool({
@@ -229,5 +231,5 @@ await client.callTool({
 });
 ```
 
-A repeated `client_request_id` returns `INVALID_REQUEST`. Omitting it disables deduplication
-(backwards-compatible behaviour).
+A repeated `client_request_id` returns `INVALID_REQUEST`, and so does omitting it. Use a fresh
+value per call; reuse one only when retrying the same logical call.

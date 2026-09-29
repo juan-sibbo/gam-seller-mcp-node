@@ -18,13 +18,13 @@ import { createMemoryLedger } from "../src/audit/ledger.js";
 import { ReplayGuard } from "../src/audit/replay.js";
 import { requiresIdempotencyKey, REQUIRE_IDEMPOTENCY_KEY_ENV } from "../src/config/resolve.js";
 
-// #82 — client_request_id drives SEC-GATE-3 (replay). It is optional by default (back-compat),
-// so omitting it bypasses replay detection. MCP_REQUIRE_IDEMPOTENCY_KEY makes it mandatory on
-// every authenticated surface (fail-closed production posture, same shape as C-02). Default off.
+// #82 — client_request_id drives SEC-GATE-3 (replay); omitting it would bypass replay detection.
+// Since v0.9.0 it is REQUIRED by default on every authenticated surface (fail-closed). An operator
+// may explicitly opt out with MCP_REQUIRE_IDEMPOTENCY_KEY=0|false|no|off (legacy clients).
 
 const BUYER = "test-buyer-001";
 
-async function setup(requireIdempotencyKey: boolean) {
+async function setup(requireIdempotencyKey?: boolean) {
   const keyPair = await generateDevKeyPair();
   const issuer = new TokenIssuer(keyPair.privateKey);
   const server = buildServer({
@@ -49,12 +49,12 @@ async function setup(requireIdempotencyKey: boolean) {
 }
 
 describe("requiresIdempotencyKey — env flag", () => {
-  it("is false by default and true only for truthy spellings", () => {
-    expect(requiresIdempotencyKey({})).toBe(false);
-    for (const v of ["1", "true", "YES", "True"]) {
+  it("is true by default and false only for explicit opt-out spellings", () => {
+    expect(requiresIdempotencyKey({})).toBe(true);
+    for (const v of ["1", "true", "YES", "", "garbage"]) {
       expect(requiresIdempotencyKey({ [REQUIRE_IDEMPOTENCY_KEY_ENV]: v })).toBe(true);
     }
-    for (const v of ["0", "false", "", "off"]) {
+    for (const v of ["0", "false", "No", " off "]) {
       expect(requiresIdempotencyKey({ [REQUIRE_IDEMPOTENCY_KEY_ENV]: v })).toBe(false);
     }
   });
@@ -76,7 +76,20 @@ describe("MCP_REQUIRE_IDEMPOTENCY_KEY — SEC-GATE-3 cannot be bypassed by omiss
     expect(res.isError).toBeFalsy();
   });
 
-  it("default posture (flag off) still accepts a request without client_request_id (back-compat)", async () => {
+  it("default posture (nothing injected, env unset) rejects a request without client_request_id", async () => {
+    const prev = process.env[REQUIRE_IDEMPOTENCY_KEY_ENV];
+    delete process.env[REQUIRE_IDEMPOTENCY_KEY_ENV];
+    try {
+      const { client, token } = await setup(undefined);
+      const res = await client.callTool({ name: "discover_products", arguments: { token } });
+      expect(res.isError).toBe(true);
+      expect(JSON.parse((res.content as Array<{ text: string }>)[0]!.text).code).toBe("INVALID_REQUEST");
+    } finally {
+      if (prev !== undefined) process.env[REQUIRE_IDEMPOTENCY_KEY_ENV] = prev;
+    }
+  });
+
+  it("explicit opt-out (flag off) still accepts a request without client_request_id (back-compat)", async () => {
     const { client, token } = await setup(false);
     const res = await client.callTool({ name: "discover_products", arguments: { token } });
     expect(res.isError).toBeFalsy();

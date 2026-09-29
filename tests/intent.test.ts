@@ -62,6 +62,7 @@ async function setupIntentServer(pricingStore?: PricingStore): Promise<IntentCtx
     forecastRateLimiter: new RateLimiter(),
     ledger,
     replayGuard: new ReplayGuard(),
+    requireIdempotencyKey: false, // not exercising SEC-GATE-3 — see idempotency-required.test.ts
     intentStore,
   });
 

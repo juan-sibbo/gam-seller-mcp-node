@@ -11,8 +11,12 @@ check fails closed, not open.
 
 Certain response categories — exact pricing, deal IDs, raw availability numbers, anything that
 would let a buyer create or modify an order — are not "not implemented yet," they are on a fixed
-denylist that the policy engine consults on every request. Adding a new MCP tool later doesn't
-bypass this: the denylist is checked independently of which tool was called.
+denylist that the policy engine consults on every request. That denylist works on the surface
+label each tool declares, not on what the tool returns — so it is paired with a **disclosure
+gate**: every authenticated tool declares a strict response schema, and any response carrying an
+undeclared field is withheld before it leaves the node. A new tool cannot be registered without
+one, so widening what a buyer sees is always an explicit, reviewable change to
+`src/policy/disclosure.ts`.
 
 ## Errors don't leak state
 

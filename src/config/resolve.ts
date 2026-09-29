@@ -86,13 +86,13 @@ export function assertOperatorConfigWhenRequired(
 }
 
 // Env flag: require a client-supplied idempotency key (client_request_id) on every authenticated
-// request. `client_request_id` drives SEC-GATE-3 (replay detection); it is OPTIONAL by default for
-// back-compat, which means a request that simply omits it bypasses replay detection entirely
-// (issue #82). When this flag is set, an authenticated request WITHOUT a client_request_id is
-// rejected — so the replay gate cannot be bypassed by omission. Off by default (back-compat);
-// a real deployment opts in, same posture as MCP_REQUIRE_OPERATOR_CONFIG. Truthy = 1 / true / yes.
+// request. `client_request_id` drives SEC-GATE-3 (replay detection); a request that simply omits
+// it would bypass replay detection entirely (issue #82). REQUIRED BY DEFAULT since v0.9.0
+// (fail-closed): an authenticated request WITHOUT a client_request_id is rejected. An operator
+// may explicitly opt out (back-compat for legacy clients) with 0 / false / no / off. Any other
+// value — including unset or empty — keeps the gate on.
 export const REQUIRE_IDEMPOTENCY_KEY_ENV = "MCP_REQUIRE_IDEMPOTENCY_KEY";
 
 export function requiresIdempotencyKey(env: NodeJS.ProcessEnv = process.env): boolean {
-  return ["1", "true", "yes"].includes((env[REQUIRE_IDEMPOTENCY_KEY_ENV] ?? "").trim().toLowerCase());
+  return !["0", "false", "no", "off"].includes((env[REQUIRE_IDEMPOTENCY_KEY_ENV] ?? "").trim().toLowerCase());
 }

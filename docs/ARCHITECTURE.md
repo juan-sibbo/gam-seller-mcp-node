@@ -46,6 +46,7 @@ flowchart TB
         PE[engine.ts — Default-Deny]
         ENT["entitlements.ts — entitlements.json"]
         PT[types.ts — allow/denylist surfaces]
+        DC[disclosure.ts — per-tool response schemas]
     end
 
     subgraph Domain
@@ -99,8 +100,9 @@ flowchart TB
 `discover_products`, `get_forecast`, `create_intent` and `revoke_intent` are all registered through
 one wrapper (`guardedTool` in `server.ts`), so no authenticated surface can skip a gate:
 
-1. **Replay guard (SEC-GATE-3)** — a repeated `client_request_id` is rejected. The key is optional
-   by default; `MCP_REQUIRE_IDEMPOTENCY_KEY` makes it mandatory (fail-closed).
+1. **Replay guard (SEC-GATE-3)** — a repeated `client_request_id` is rejected, and (since v0.9.0)
+   a request without one is rejected too. `MCP_REQUIRE_IDEMPOTENCY_KEY=0` is an explicit operator
+   opt-out for legacy clients.
 2. **Authenticate** — a buyer token is **required** on every authenticated surface; there is no
    anonymous path (`require_auth: false` is not supported and refuses to boot). The token is
    validated (RS256 signature → claims with `aud=seller-mcp-node` → revocation denylist) and the
@@ -122,6 +124,10 @@ one wrapper (`guardedTool` in `server.ts`), so no authenticated surface can skip
      delivered to the publisher's sales rails as a local JSONL drop (`MCP_INTENT_HANDOFF=file`),
      off the request path. Never a GAM order or an inventory hold.
    - `revoke_intent`: a buyer can withdraw only its own active intents.
+   - **Disclosure gate** — before any response leaves, it is validated against the tool's strict
+     schema (`src/policy/disclosure.ts`; errors against the safe error envelope). An undeclared
+     field anywhere in the payload withholds the whole response and returns `INTERNAL_ERROR`.
+     The surface denylist (step 3) decides who may call a tool; this decides what it may return.
 6. **Audit** — every meaningful step (auth outcome, scope decision, forecast request, intent
    created/revoked/expired) is appended to the ledger, with the buyer identifier pseudonymized
    first.

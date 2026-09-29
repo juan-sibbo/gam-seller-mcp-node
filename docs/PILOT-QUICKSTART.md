@@ -18,7 +18,7 @@ MCP_CONFIG_DIR=/path/to/your/config scripts/pilot.sh
 ```
 
 `scripts/pilot.sh` builds the node, applies the production guards (`MCP_REQUIRE_OPERATOR_CONFIG`,
-`MCP_REQUIRE_IDEMPOTENCY_KEY`, an audit anchor, and the handoff file drop), **mints a buyer token
+an audit anchor, and the handoff file drop; the idempotency key is required by default), **mints a buyer token
 for every entitled buyer**, prints them, and runs the node in the foreground. It then tells you
 the exact command to drive a buyer agent. Ctrl-C stops it.
 
@@ -39,7 +39,6 @@ npm install && npm run build
 # 1. Point at your real config (or omit for the bundled demo)
 export MCP_CONFIG_DIR=/path/to/your/config
 export MCP_REQUIRE_OPERATOR_CONFIG=1     # refuse to boot on demo config
-export MCP_REQUIRE_IDEMPOTENCY_KEY=1     # every call must carry an idempotency key
 export MCP_ANCHOR_SINK=tsa               # anchor the audit trail to a third party (or "file")
 export MCP_INTENT_HANDOFF=file           # close the handoff loop
 

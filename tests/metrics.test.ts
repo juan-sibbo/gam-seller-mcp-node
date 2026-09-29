@@ -68,6 +68,7 @@ async function setupServer(): Promise<TestContext> {
     forecastRateLimiter: new RateLimiter(),
     ledger: createMemoryLedger(),
     replayGuard: new ReplayGuard(),
+    requireIdempotencyKey: false, // not exercising SEC-GATE-3 — see idempotency-required.test.ts
     metricsRegistry: metrics,
   });
 
