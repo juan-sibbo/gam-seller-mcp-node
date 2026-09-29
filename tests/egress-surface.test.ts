@@ -22,9 +22,9 @@ import { ReplayGuard } from "../src/audit/replay.js";
 
 // Network egress contract — declared and bounded egress, not "egress deny-all".
 //
-// The node's buyer request path makes no outbound network calls. The only outbound network
-// activity is the operator-opted external audit anchor (MCP_ANCHOR_SINK=tsa|s3|<module>), which
-// runs at boot and on the periodic anchor cycle, never inside a buyer request. This suite pins
+// The node's buyer request path makes no outbound network calls. Outbound network activity is
+// operator-opted and runs at boot and on a timer, never inside a buyer request: the external audit
+// anchor (MCP_ANCHOR_SINK=tsa|s3|<module>) and the live GAM forecast refresh (config/gam.json). This suite pins
 // that architecture with two guarantees:
 //
 //   1. Egress surface allowlist — network capabilities may only live in the modules declared
@@ -88,6 +88,12 @@ const DECLARED_EGRESS_SURFACE: Record<string, string[]> = {
   "audit/anchor-s3.ts": ["dynamic-import"],
   // Anchor resolver: loads an operator-supplied custom sink module (MCP_ANCHOR_SINK=<module>).
   "audit/anchor-sink.ts": ["dynamic-import"],
+  // Live GAM forecast (config/gam.json), boot + 30-min refresh cycle only: OAuth token exchange
+  // with Google for the operator's service account…
+  "gam/auth.ts": ["global-fetch"],
+  // …and read-only SOAP calls (getCurrentNetwork, getAvailabilityForecast) to the fixed Ad Manager
+  // endpoint for the operator-configured network.
+  "gam/soap.ts": ["global-fetch"],
   // INBOUND only: the HTTP transport serves requests; it never acts as a client (pinned below).
   "http.ts": ["network-module-import"],
 };

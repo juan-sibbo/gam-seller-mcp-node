@@ -119,10 +119,9 @@ falls through to the synthetic source, so a partial seed still answers every req
 template lives at [`config/examples/pilot-publisher/forecast.sample.json`](../config/examples/pilot-publisher/forecast.sample.json).
 
 > **Still labeled synthetic.** Seeding makes the numbers realistic, but the node keeps
-> `synthetic: true` on every forecast result — pre-loaded data is not a live avail. The live GAM
-> ForecastService adapter remains a stub until a service account is provisioned (see
-> [The last mile](#the-last-mile--live-gam)). This keeps the node honest: it never claims a live
-> GAM connection it does not have.
+> `synthetic: true` on every forecast result — pre-loaded data is not a live avail. Only the live
+> GAM source (see [The last mile](#the-last-mile--live-gam)) reports `synthetic: false`. This keeps
+> the node honest: it never claims a live GAM connection it does not have.
 
 Omit the file entirely to keep the v1 synthetic behavior. A present-but-malformed `forecast.json`
 fails closed (the node refuses to start) — the same contract as the other config files.
@@ -324,19 +323,37 @@ MCP_INTENT_HANDOFF=file                  # close the handoff loop to your sales 
 
 ## The last mile — live GAM
 
-Everything above runs **without** a Google Ad Manager connection. The final step — replacing the
-seeded/synthetic forecast with live avails — needs credentials only you can provide:
+Everything above runs **without** a Google Ad Manager connection. Replacing the seeded/synthetic
+forecast with live avails needs a credential only you can provide, and one config file:
 
-1. A **GAM service account** with the **ForecastService** scope granted inside the network
-   (issue #4, DP-AB-01 §5.2). Existing order-injection service accounts prove org-level API access
-   exists, but this integration needs its own credential and scope.
-2. Wire it into [`src/forecast/source.ts`](../src/forecast/source.ts) — the `GamForecastSource`
-   seam already exists as a stub; it throws until the SOAP call to `getAvailabilityForecast` is
-   implemented against that credential.
+1. **Service account.** Create one in Google Cloud, download its JSON key, and store it outside
+   the repo with `chmod 600`. In GAM (*Admin → Global settings → API access*) enable API access,
+   then add the service-account email as a user of the network. Give it the **smallest role that
+   can read inventory and run forecasts** — no reporting, trafficking or write permissions are
+   needed. Prefer one service account per network, so a leaked key reaches one publisher only.
+2. **`gam.json`** in your config dir (template:
+   [`config/examples/pilot-publisher/gam.sample.json`](../config/examples/pilot-publisher/gam.sample.json)):
+   the numeric `network_code`, the key path (`service_account_key_path`, or env `GAM_SA_KEY_PATH`,
+   which wins), and one entry per catalog family with its GAM targeting — `sizes`, optional
+   `environment` (`BROWSER` default, or `VIDEO_PLAYER`) and optional `ad_unit_ids` (default: the
+   whole network). Optional `thresholds` (same semantics as `forecast.json`) and `periods`
+   (`YYYY-MM` / `Qn-YYYY`; default: the current and next 2 months plus the current and next
+   quarter).
+3. **Boot and check the log.** `[forecast] GAM initial snapshot: N ok, 0 failed` means every
+   family × period was answered by GAM. Failures are logged per pair with the GAM fault and never
+   stop the node; a pair that keeps failing is withheld from buyers once its last good value is
+   older than 90 minutes.
 
-Until then the node is honest by construction: `synthetic: true` on every forecast, and no
-ad-server write path exists anywhere. Provision the service account and the same seam flips from
-seeded-synthetic to live — no other code changes.
+What the adapter does: at boot and every 30 minutes it calls `getAvailabilityForecast` with a
+**prospective line item** per family × period — built in memory, never saved, so nothing in GAM
+is created, modified or reserved. It keeps only `availableUnits`, reduced to a Low/Mid/High
+bucket. Buyers are answered from that snapshot (`synthetic: false`); a buyer request never
+triggers a GAM call. A family missing from `gam.json` or a period outside the snapshot returns
+`NOT_FOUND`.
+
+> **WSL2 note.** If the log shows `fetch failed (ETIMEDOUT)` while other tools reach Google fine,
+> Node's IPv4/IPv6 fallback is giving up too early. Start the node with
+> `NODE_OPTIONS=--network-family-autoselection-attempt-timeout=2000`.
 
 ## Troubleshooting
 

@@ -52,7 +52,7 @@ flowchart TB
     subgraph Domain
         CAT["catalog/ — catalog.json + projection.ts (no-leak)"]
         PR["pricing/store.ts — pricing.json, fail-closed on expiry"]
-        FC["forecast/ — synthetic or seeded (forecast.json); GAM source = stub"]
+        FC["forecast/ — synthetic, seeded (forecast.json) or live GAM snapshot (gam.json)"]
         INT["intent/ — store.ts (TTL) + handoff.ts (null | file drop)"]
         WK[discovery/well-known.ts]
         RL[rate-limiter/limiter.ts]
@@ -116,9 +116,10 @@ one wrapper (`guardedTool` in `server.ts`), so no authenticated surface can skip
 5. **Domain logic**
    - `discover_products`: the buyer's entitled families, projected field by field (unknown keys
      are dropped), each with its firm list price when one is configured and not expired.
-   - `get_forecast`: a Low/Mid/High bucket from the synthetic source, or from operator-seeded
-     numbers (`forecast.json`). Every result is labelled `synthetic: true`; the GAM
-     ForecastService source exists as a stub that throws until a service account is provisioned.
+   - `get_forecast`: a Low/Mid/High bucket from the live GAM snapshot (`gam.json`,
+     `synthetic: false`), from operator-seeded numbers (`forecast.json`) or from the synthetic
+     source — both labelled `synthetic: true`. The GAM snapshot is refreshed at boot and every
+     30 minutes, outside the buyer request path.
    - `create_intent`: rejected unless `price_ref` equals the family's current firm price; records
      a buyer-scoped intent whose expiry is capped by the price's `valid_until`. Optionally
      delivered to the publisher's sales rails as a local JSONL drop (`MCP_INTENT_HANDOFF=file`),

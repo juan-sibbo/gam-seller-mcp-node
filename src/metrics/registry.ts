@@ -29,6 +29,8 @@ export const ToolOutcome = {
   // A well-formed request the node refuses on its merits (e.g. create_intent over a
   // stale/non-matching firm price). Distinct from AUTH_FAILED: identity was fine.
   INVALID_REQUEST: "invalid_request",
+  // The node cannot answer right now or for this input (e.g. live GAM snapshot not ready/stale).
+  UNAVAILABLE: "unavailable",
   INTERNAL_ERROR: "internal_error",
 } as const;
 export type ToolOutcome = (typeof ToolOutcome)[keyof typeof ToolOutcome];

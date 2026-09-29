@@ -48,7 +48,7 @@ export const ForecastDisclosure = z
     bucket: z.enum(Object.values(FORECAST_BUCKET) as [string, ...string[]]),
     bucket_label: z.string(),
     ttl_seconds: z.number(),
-    synthetic: z.literal(true),
+    synthetic: z.boolean(),
     consent_context: reservedNull,
     legal_basis_provenance: reservedNull,
     request_id: z.string(),

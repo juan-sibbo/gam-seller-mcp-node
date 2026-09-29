@@ -31,6 +31,8 @@ import { resolveHandoffSink, NullHandoffSink, type HandoffSink } from "./intent/
 import { RateLimiter } from "./rate-limiter/limiter.js";
 import { ForecastEngine } from "./forecast/engine.js";
 import { loadForecastSourceFromFile, SeededForecastSource } from "./forecast/seeded-source.js";
+import { ForecastUnavailableError, GAM_REFRESH_INTERVAL_MS, loadGamForecastSourceFromFile, type GamForecastSource } from "./forecast/gam-source.js";
+import type { ForecastSource } from "./forecast/source.js";
 import { loadDeploymentConfigFromFile } from "./config/deployment.js";
 import { isDemoMode, demoFallbackFiles, assertOperatorConfigWhenRequired, requiresIdempotencyKey } from "./config/resolve.js";
 import { AuditLedger, DEV_LEDGER_PATH } from "./audit/ledger.js";
@@ -347,12 +349,13 @@ function buildServer(deps: ServerDeps): McpServer {
     }
   );
 
-  // Forecast (bucketized, synthetic) — s5-forecast-demo-mode-authorization-2026-07-04.md
-  // Returns Low/Mid/High availability bucket. synthetic: true always set in demo mode.
+  // Forecast (bucketized) — s5-forecast-demo-mode-authorization-2026-07-04.md
+  // Returns Low/Mid/High availability bucket. synthetic: false only when the source is a live GAM
+  // snapshot (config/gam.json); synthetic and seeded sources stay synthetic: true.
   // Z3: response contains only inventory-level data — no audience attributes.
   guardedTool<{ family_id: string; period: string; token?: string; client_request_id?: string }>(
     "get_forecast",
-    "Get a coarse availability forecast (Low/Mid/High) for a product family and period. Demo mode: synthetic data only.",
+    "Get a coarse availability forecast (Low/Mid/High) for a product family and period. `synthetic` tells whether the bucket comes from a live ad-server forecast.",
     {
       family_id: z.string().describe("Product family ID from discover_products"),
       period: z.string().describe("Target period (e.g. Q4-2026, 2026-10)"),
@@ -362,12 +365,35 @@ function buildServer(deps: ServerDeps): McpServer {
     { title: "Get Availability Forecast", readOnlyHint: true, openWorldHint: false },
     { surface: AllowedSurface.FORECAST, metricTool: MetricTool.GET_FORECAST, rateLimiter: forecastRateLimiter, disclosure: ForecastDisclosure },
     async ({ family_id, period }, { buyer_id, request_id }) => {
-      const result = await forecastEngine.forecast(family_id, period);
+      let result;
+      try {
+        result = await forecastEngine.forecast(family_id, period);
+      } catch (err) {
+        // Buyer-safe mapping: no source/GAM detail travels (a thrown message would otherwise be
+        // echoed to the buyer by the MCP SDK). Unexpected errors go to the operator log.
+        let code: ErrorCode;
+        let message: string;
+        if (err instanceof ForecastUnavailableError) {
+          [code, message] =
+            err.reason === "unknown_family" || err.reason === "unknown_period"
+              ? [ErrorCode.NOT_FOUND, "No forecast is available for this family and period."]
+              : [ErrorCode.UNAVAILABLE, "Forecast temporarily unavailable."];
+          recordOutcome(MetricTool.GET_FORECAST, ToolOutcome.UNAVAILABLE);
+        } else {
+          process.stderr.write(`[forecast] source error: ${err instanceof Error ? err.message : String(err)}\n`);
+          [code, message] = [ErrorCode.INTERNAL_ERROR, "An internal error occurred."];
+          recordOutcome(MetricTool.GET_FORECAST, ToolOutcome.INTERNAL_ERROR);
+        }
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(makeSafeError(code, message, request_id, CONTRACT_VERSION)) }],
+          isError: true,
+        };
+      }
       // FORECAST_REQUEST payload is minimized: bucket + coarse identifiers only
       // (no raw avails — KANON §Logs-y-Audit).
       ledger.append(
         EventClass.FORECAST_REQUEST,
-        { family_id, period, bucket: result.bucket, synthetic: true },
+        { family_id, period, bucket: result.bucket, synthetic: result.synthetic },
         { buyer_id, request_id }
       );
       recordOutcome(MetricTool.GET_FORECAST, ToolOutcome.SUCCESS);
@@ -531,6 +557,27 @@ function anchorHead(ledger: AuditLedger, anchor: HeadHashAnchor): void {
   ledger.append(EventClass.ANCHORING, { anchored_head_hash: record.head_hash, anchor_seq: record.seq });
 }
 
+// Live GAM forecast: first snapshot at boot (awaited, so buyers see live data from the first call
+// when GAM is reachable), then one refresh per forecast TTL. Refresh failures are logged and never
+// crash the node — stale entries are withheld by the source itself (GAM_MAX_STALENESS_MS).
+async function startGamRefresh(source: GamForecastSource): Promise<void> {
+  const runCycle = async (label: string): Promise<void> => {
+    const r = await source.refresh();
+    process.stderr.write(
+      `[forecast] GAM ${label}: ${r.ok} ok, ${r.failed} failed, ${r.skipped} skipped ` +
+        `(snapshot ${source.snapshotSize()} family/period pairs)\n`
+    );
+    for (const e of r.errors) process.stderr.write(`[forecast]   ${e}\n`);
+  };
+  process.stderr.write(`[forecast] Live GAM forecast source active (config/gam.json) — synthetic: false.\n`);
+  await runCycle("initial snapshot");
+  setInterval(() => {
+    runCycle("refresh").catch((err: unknown) =>
+      process.stderr.write(`[forecast] GAM refresh crashed: ${err instanceof Error ? err.message : String(err)}\n`)
+    );
+  }, GAM_REFRESH_INTERVAL_MS).unref();
+}
+
 async function main() {
   // Fail-closed: an invalid legal config (missing dsr_contact, bad retention) must
   // prevent startup — loadDeploymentConfigFromFile throws before anything serves.
@@ -582,11 +629,13 @@ async function main() {
     );
   }
   const rateLimiter = new RateLimiter();
-  // Forecast source: opt-in seeded buckets from config/forecast.json (a one-time GAM report
-  // export — realistic numbers, NOT a live avail), else the deterministic synthetic source.
-  // Either way the engine keeps `synthetic: true` — seeding makes buckets real, not the read
-  // live (the live GAM adapter stays a stub pending a service account, issue #4).
-  const forecastSource = loadForecastSourceFromFile();
+  // Forecast source, highest precedence first:
+  //   1. config/gam.json   — live GAM ForecastService snapshot (synthetic: false).
+  //   2. config/forecast.json — seeded buckets from a one-time GAM report export (synthetic: true).
+  //   3. deterministic synthetic source (synthetic: true).
+  const gamSource = loadGamForecastSourceFromFile();
+  const forecastSource: ForecastSource = gamSource ?? loadForecastSourceFromFile();
+  if (gamSource) await startGamRefresh(gamSource);
   const forecastEngine = new ForecastEngine(forecastSource);
   if (forecastSource instanceof SeededForecastSource) {
     process.stderr.write(

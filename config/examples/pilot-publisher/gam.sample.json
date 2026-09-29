@@ -1,0 +1,12 @@
+{
+  "_comment": "OPT-IN live GAM forecast. Rename to gam.json inside your MCP_CONFIG_DIR to activate; it takes precedence over forecast.json. The node asks GAM ForecastService for every family x period at boot and every 30 minutes with prospective line items that are never saved, and answers buyers from that snapshot with synthetic:false. The service account must be a user of the GAM network with a role that can read inventory and run forecasts. Keep the key outside the repo; GAM_SA_KEY_PATH overrides service_account_key_path. Families missing here return NOT_FOUND on get_forecast.",
+  "network_code": "12345678",
+  "service_account_key_path": "/secure/gam-seller-node/service-account.json",
+  "api_version": "v202608",
+  "thresholds": { "mid": 2000000, "high": 20000000 },
+  "families": {
+    "display-ros": { "sizes": ["300x250", "728x90", "300x600"] },
+    "video-pre-roll": { "sizes": ["640x480"], "environment": "VIDEO_PLAYER" },
+    "native-feed": { "sizes": ["1x1"], "ad_unit_ids": ["21700000000"] }
+  }
+}

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import { ForecastEngine, SyntheticForecastSource, FORECAST_TTL_SECONDS, FORECAST_BUCKET, BUCKET_LABELS } from "../src/forecast/engine.js";
-import { GamForecastSource, type ForecastSource } from "../src/forecast/source.js";
+import type { ForecastSource } from "../src/forecast/source.js";
 import { RateLimiter, RATE_LIMIT_WINDOW_MS } from "../src/rate-limiter/limiter.js";
 import { PolicyEngine } from "../src/policy/engine.js";
 import { EntitlementStore, TEST_ENTITLEMENTS_DEMO_CONFIG } from "../src/policy/entitlements.js";
@@ -103,7 +103,7 @@ describe("ForecastSource seam — ForecastEngine consumes an injectable source",
     expect(result.bucket_label).toBe(BUCKET_LABELS.high);
   });
 
-  it("synthetic flag stays true regardless of the injected source (invariant until production gate)", async () => {
+  it("synthetic flag stays true for any source that does not declare itself live", async () => {
     const fixedLow: ForecastSource = {
       async getAvailsBucket() {
         return FORECAST_BUCKET.LOW;
@@ -121,15 +121,26 @@ describe("ForecastSource seam — ForecastEngine consumes an injectable source",
     expect(Object.values(FORECAST_BUCKET)).toContain(a);
   });
 
-  it("GamForecastSource is a stub — throws until service account provisioning (DP-AB-01 §5.2)", async () => {
-    const gam = new GamForecastSource({ networkCode: "12345678", serviceAccountKeyPath: "GAM_SA_KEY" });
-    await expect(gam.getAvailsBucket("display-ros", "Q4-2026")).rejects.toThrow(/not implemented/i);
+  it("synthetic is false only for a source that declares itself live", async () => {
+    const live: ForecastSource = {
+      live: true,
+      async getAvailsBucket() {
+        return FORECAST_BUCKET.MID;
+      },
+    };
+    const result = await new ForecastEngine(live).forecast("x", "y");
+    expect(result.synthetic).toBe(false);
+    expect(result.bucket).toBe(FORECAST_BUCKET.MID);
   });
 
-  it("an engine wired to GamForecastSource surfaces the stub error (no silent GAM read)", async () => {
-    const gam = new GamForecastSource({ networkCode: "12345678", serviceAccountKeyPath: "GAM_SA_KEY" });
-    const engine = new ForecastEngine(gam);
-    await expect(engine.forecast("display-ros", "Q4-2026")).rejects.toThrow();
+  it("a source error propagates — the engine never fills in a synthetic bucket", async () => {
+    const failing: ForecastSource = {
+      live: true,
+      async getAvailsBucket() {
+        throw new Error("upstream down");
+      },
+    };
+    await expect(new ForecastEngine(failing).forecast("x", "y")).rejects.toThrow("upstream down");
   });
 });
 
