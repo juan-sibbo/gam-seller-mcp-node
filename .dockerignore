@@ -9,3 +9,21 @@ demo
 Dockerfile
 docker-compose.yml
 vitest.config.ts
+
+# VCS + local state that must never reach the build context
+.git
+.pilot
+.env
+.env.*
+deploy/.env
+
+# Secrets (same patterns as .gitignore) — a key dropped in the tree must not be baked in
+*.pem
+*.p8
+*.key
+*.pub
+*.jwk
+
+# Operator-specific config (network code, forecast seeds): mounted at runtime, never baked in
+config/gam.json
+config/forecast.json
