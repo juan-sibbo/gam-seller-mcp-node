@@ -6,8 +6,9 @@
 #
 # The node is NOT published to the host — only Caddy is (80/443). Buyer agents connect to
 # https://$DOMAIN/mcp. The node runs with the production guards on (real config required,
-# idempotency key required); mint buyer tokens with scripts/issue-buyer-token.ts against the
-# same data/keys volumes (e.g. `docker compose ... exec seller-mcp-node ...`).
+# idempotency key required). Mint buyer tokens with the node STOPPED (it owns its state and refuses
+# operator writes while running): stop → `run --rm --no-deps seller-mcp-node gam-seller-admin
+# issue-token <buyer_id>` → start. See deploy/README.md.
 
 services:
   seller-mcp-node:

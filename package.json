@@ -41,7 +41,8 @@
   },
   "bin": {
     "gam-seller-mcp-node": "dist/server.js",
-    "gam-seller-dsr": "dist/dsr/cli.js"
+    "gam-seller-dsr": "dist/dsr/cli.js",
+    "gam-seller-admin": "dist/admin/cli.js"
   },
   "main": "dist/server.js",
   "types": "dist/server.d.ts",

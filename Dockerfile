@@ -13,7 +13,8 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY tsconfig.json ./
 COPY src ./src
-RUN npm run build && npm prune --omit=dev
+RUN npm run build && npm prune --omit=dev \
+    && chmod +x dist/admin/cli.js dist/dsr/cli.js
 
 FROM node:22-alpine
 WORKDIR /app
@@ -28,6 +29,11 @@ COPY --from=build /app/dist ./dist
 # Bundled config + examples/pilot-publisher (demo fallback). Override with a :ro bind-mount.
 # Operator files (gam.json, forecast.json) are excluded by .dockerignore.
 COPY config ./config
+
+# Operator CLIs on PATH: `docker compose run --rm seller-mcp-node gam-seller-admin issue-token <id>`
+# (run with the node STOPPED — the owner lease refuses state writes against a live node).
+RUN ln -s /app/dist/admin/cli.js /usr/local/bin/gam-seller-admin \
+    && ln -s /app/dist/dsr/cli.js /usr/local/bin/gam-seller-dsr
 
 # Non-root + persistent state dirs (RS256 keys, ledger/denylist)
 RUN addgroup -S mcp && adduser -S mcp -G mcp \

@@ -1,5 +1,52 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed — a node that served traffic could not restart (`head_hash_mismatch`)
+
+- **Incident root cause:** startup verification required the latest anchor to equal the CURRENT
+  ledger head. Anchoring runs at boot (followed by an `ANCHORING` event, so the head moves past the
+  anchor at once) and then every 60 min, so any audited activity after the last anchor made the
+  next boot — graceful restart or crash — fail `head_hash_mismatch`. With `restart: unless-stopped`
+  the container crash-looped. Operator CLIs that anchor the exact head masked it in tests and in
+  `pilot.sh`.
+- **Fix:** the anchor pins a **prefix** of the chain. Boot verifies that the entry at the anchored
+  seq still carries the anchored hash (`anchored_prefix_mismatch` if history was rewritten,
+  `anchored_entry_missing` if the chain was truncated below the anchor), then replays the whole
+  chain including the unanchored tail. The tail is the exposure window the 60-min cadence already
+  accepts. `AuditLedger.hashAt(seq)` supports the check (rotation-aware).
+- **Canon:** this reinterprets decision-package §2.3 ("head-hash-first" compared against the head).
+  Pending owner sign-off.
+- Regression: `tests/restart-after-traffic.test.ts` and the end-to-end restart in
+  `tests/owner-lease-e2e.test.ts` (fails under the previous rule).
+
+### Fixed — operator commands against a running node lost writes or bricked the next boot
+
+- **Incident:** minting a buyer token against a live node — the procedure `deploy/README.md`
+  documented (`docker compose exec … issue-buyer-token`) — lost the `token_issuance` audit event
+  (the node rewrote the ledger from memory) and left an orphan anchor, so the next boot failed
+  `head_hash_mismatch`; with `restart: unless-stopped` the container crash-looped. The command
+  could not even run in the image (no `scripts/`, no `tsx`).
+- **Same root cause, found while fixing:** every file-backed store is loaded once and rewritten
+  from memory, so a second writer is ignored or overwritten. A `revoke-token` was not enforced by a
+  live node until restart; a DSR `restrict` (Art. 18) was not enforced; a DSR `suppress` (Art. 17)
+  could be undone by the node's next save (re-persisting the shredded pseudonym key and purged
+  intents). Pinned in `tests/state-ownership-hazard.test.ts`.
+- **Fix — single state owner.** The node takes an owner lease on its data directory at boot
+  (O_EXCL file + heartbeat, taken over automatically 20 s after a crash) and releases it on
+  SIGTERM/SIGINT. Operator commands take the same lease and are **refused with exit code 3** while
+  the node runs; a second node on the same volume refuses to boot. A lease left by a crashed
+  predecessor with the node's own pid (container restart: pid 1, same hostname) is taken over at
+  once, so recovery after SIGKILL takes seconds. End-to-end regression in
+  `tests/owner-lease-e2e.test.ts`.
+- **New `gam-seller-admin` bin** (`issue-token`, `revoke-token`, `dsr …`), compiled into `dist/`
+  and on PATH in the image. `gam-seller-dsr` stays (now lease-guarded); `scripts/*.ts` are dev
+  wrappers over the same code. Procedure: stop → `docker compose run --rm --no-deps seller-mcp-node
+  gam-seller-admin issue-token <buyer_id>` → start.
+- **Container:** SIGTERM is now handled (node as PID 1 ignored it, so `docker stop` waited out its
+  timeout); healthcheck on `/health` requiring `persistence_healthy`; build context excludes `.git`,
+  env files, key material and operator config (`gam.json`, `forecast.json`).
+
 ## [0.11.0] — 2026-09-29 — availability a buyer can act on
 
 ### `check_availability` — an answer a buyer can act on

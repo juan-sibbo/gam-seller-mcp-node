@@ -399,10 +399,11 @@ Raw `buyer_id` values never enter the audit ledger — only an HMAC pseudonym. T
 buyer's audit data (GDPR Art. 15/17/18/20). The node stores nothing about end users; the DSR
 scope is exactly what it records — B2B buyer organization pseudonyms and their request events.
 
-**Distribution note.** The DSR toolkit ships in the npm package as the `gam-seller-dsr` bin, so
-export / restriction / erasure can be run without a checkout. The token-management scripts
-(`scripts/issue-buyer-token.ts`, `scripts/revoke-token.ts`) remain source-only — publishers who
-need them must clone the repository.
+**Distribution note.** Operator commands ship in the npm package and the container image as the
+`gam-seller-admin` bin (`issue-token`, `revoke-token`, `dsr …`; `gam-seller-dsr` remains as an alias
+for the DSR commands), so no checkout is needed. They write the node's state and therefore run
+only while the node is stopped: a running node owns its state directory (owner lease) and the
+command is refused with exit code 3. The `scripts/*.ts` entries are dev wrappers over the same code.
 
 ## Roadmap
 
