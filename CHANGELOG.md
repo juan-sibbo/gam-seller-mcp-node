@@ -4,7 +4,7 @@
 
 Two config-driven seams that let a pilot run on a publisher's real inventory shape **without** a
 live GAM connection (the ForecastService adapter stays a stub pending a service account). No new
-MCP tools; the audience-blind, egress-deny-all, no-ad-server-writes posture is unchanged.
+MCP tools; the audience-blind, no-egress-on-the-request-path, no-ad-server-writes posture is unchanged.
 
 ### Seeded forecast source
 
@@ -22,8 +22,8 @@ MCP tools; the audience-blind, egress-deny-all, no-ad-server-writes posture is u
 - **`MCP_INTENT_HANDOFF=file` (opt-in).** Closes the loop: a committed intent is delivered to the
   publisher's classic sales rails as a JSONL drop (`FileHandoffSink`), which an operator-owned
   forwarder tails. Default is `NullHandoffSink` (no delivery; `create_intent` unchanged).
-- **Egress deny-all preserved.** The node makes no outbound calls — a URL value is refused with a
-  pointer to the file drop. Delivery is fire-and-forget off the request path: a slow/failing sink
+- **No egress on the request path.** The handoff makes no outbound call — a URL value is refused
+  with a pointer to the file drop. Delivery is fire-and-forget off the request path: a slow/failing sink
   never delays or fails the buyer's commit (the ledger is the record of record); failures surface
   on `mcp_intent_handoff_total{outcome="failed"}` and stderr, never swallowed.
 
@@ -41,6 +41,18 @@ MCP tools; the audience-blind, egress-deny-all, no-ad-server-writes posture is u
   declared modules; anchor backends are reachable only via the operator-config resolver, never
   from `buildServer`; no buyer-facing tool accepts a destination-like argument. A new outbound
   capability fails CI until it is declared on purpose.
+
+### Documentation drift corrected
+
+- **`docs/ARCHITECTURE.md` re-synced with the code.** It still described three tools, an optional
+  token ("if a token is present"), code-fixture entitlements and a single anchor file. It now
+  covers the five tools behind the shared `guardedTool` gate, token-mandatory identity
+  (`token.sub`), `entitlements.json`, synthetic/seeded forecast sources, the intent store and
+  handoff sink, the selectable anchor sinks, and which work runs in background cycles rather than
+  in the buyer request path.
+- **"Read-only" wording retired.** Since v0.5 the node has one write — the buyer's own soft
+  commitment — so the package/registry description and the design principle now say what is
+  actually true: no ad-server writes.
 
 ## [0.1.0] — 2026-07-22
 

@@ -37,12 +37,16 @@ exists in the type system as a reserved, always-null placeholder: the intent is 
 audience-aware features are ever added, they arrive through an explicit, separately-gated
 extension — not by quietly filling in a field that already exists.
 
-## Read-only is a boundary, not a milestone
+## No ad-server writes is a boundary, not a milestone
 
-There's no plan to "eventually" add write operations to this node. Order creation, media buys,
-and anything that mutates the ad server are excluded from the tool surface as a permanent
-design boundary, not a temporary MVP limitation. A future GAM-connected write path, if it ever
-exists, would be a separate, explicitly-gated component — not an extension of this server.
+There's no plan to "eventually" let this node write to an ad server. Order creation, media buys,
+inventory reservation and anything that mutates the ad server are on the permanent surface
+denylist — a design boundary, not a temporary MVP limitation. The node's only write is a buyer's
+own soft commitment (`create_intent` / `revoke_intent`): a time-boxed, buyer-scoped record at the
+current firm price that a human on the publisher side acts on. It was added to the allowlist by an
+explicit amendment and can never become a GAM order or an inventory hold. A future GAM-connected
+write path, if it ever exists, would be a separate, explicitly-gated component — not an extension
+of this server.
 
 ## Config over code for deployment-specific data
 
