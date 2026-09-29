@@ -128,7 +128,7 @@ describe("RetentionService — rotation (hot → archive)", () => {
     // Standard periodic anchoring of the current head (60-min cycle in production)
     anchor.anchor(ledger.headHash(), ledger.headSeq());
 
-    const result = verifyAfterRestore(ledger.headHash(), () => ledger.replayVerify(), anchor);
+    const result = verifyAfterRestore(ledger.headHash(), () => ledger.replayVerify(), anchor, (seq) => ledger.hashAt(seq));
     expect(result.valid).toBe(true);
   });
 });

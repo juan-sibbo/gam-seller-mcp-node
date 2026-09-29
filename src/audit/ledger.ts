@@ -166,6 +166,14 @@ export class AuditLedger {
     return this.entries;
   }
 
+  // Hash of the entry at global `seq`, for anchor verification. seq === baseSeq - 1 is the last
+  // rotated-out entry, whose hash the chain carries over (carryPrevHash). undefined when the
+  // entry is not in the hot ledger (truncated, or never written).
+  hashAt(seq: number): string | undefined {
+    if (seq === this.baseSeq - 1 && this.carryPrevHash !== "") return this.carryPrevHash;
+    return this.entries[seq - this.baseSeq]?.hash;
+  }
+
   // Highest global seq in the hot ledger (baseSeq + hot count - 1), or -1 if empty.
   headSeq(): number {
     return this.baseSeq + this.entries.length - 1;

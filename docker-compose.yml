@@ -1,16 +1,24 @@
-# GAM Seller MCP Node — despliegue dev/demo (Fase B)
-# Publish en loopback del host: exposición externa gateada por blockers #8/#10.
+# GAM Seller MCP Node — local dev/demo deployment.
+# Published on host loopback only. For public hosting (TLS), use deploy/docker-compose.prod.yml.
+#
+#   docker compose up -d --build
 services:
   seller-mcp-node:
     build: .
     ports:
       - "127.0.0.1:3900:3900"
+    # environment:
+    #   MCP_INTENT_HANDOFF: "file"                          # JSONL drop of committed intents on the data volume
+    #   MCP_INTENT_HANDOFF_FILE: "/app/data/intent-handoff.jsonl"
+    #   GAM_SA_KEY_PATH: "/run/secrets/gam-sa.json"         # live GAM forecast (needs config/gam.json)
     volumes:
-      # Estado persistente en named volumes (claves RS256, ledger, denylist, anchors)
+      # Persistent state in named volumes (RS256 keys, ledger, denylist, anchors)
       - mcp-keys:/app/keys
       - mcp-data:/app/data
-      # Config legal por despliegue — editable en el host sin rebuild
+      # Per-deployment config — editable on the host without a rebuild
       - ./config:/app/config:ro
+      # Live GAM forecast (opt-in): mount the service-account key read-only, outside the repo
+      # - /secure/gam-sa.json:/run/secrets/gam-sa.json:ro
     restart: unless-stopped
 
 volumes:

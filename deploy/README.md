@@ -33,12 +33,19 @@ curl https://$DOMAIN/health
 curl https://$DOMAIN/.well-known/seller-mcp-capabilities
 ```
 
-Mint a buyer token against the running node's volumes and hand it to a buyer agent:
+Mint a buyer token and hand it to a buyer agent. Operator commands write the node's state, so
+they run with the node **stopped** (a live node owns the state and refuses them — exit 3):
 
 ```bash
-docker compose -f deploy/docker-compose.prod.yml exec seller-mcp-node \
-  node --import tsx scripts/issue-buyer-token.ts <buyer_id>
+C="docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env"
+$C stop seller-mcp-node
+$C run --rm --no-deps seller-mcp-node gam-seller-admin issue-token <buyer_id>   # token on stdout
+$C start seller-mcp-node
 ```
+
+The same pattern serves `gam-seller-admin revoke-token <token>` and
+`gam-seller-admin dsr <export|restrict|unrestrict|suppress> <buyer_id>`. Keep the stop short: the
+node is unavailable to buyers while it is stopped.
 
 ## What is still on the human side
 

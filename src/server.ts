@@ -49,6 +49,7 @@ import { buildHealthReport } from "./health.js";
 import { packageVersion } from "./config/paths.js";
 import { MetricsRegistry, MetricTool, ToolOutcome, AuthFailReason, HandoffOutcome } from "./metrics/registry.js";
 import { randomUUID } from "crypto";
+import { OwnerLease } from "./owner-lease.js";
 
 // Buyer contract shape. Bumped 0.1.0 → 0.2.0 in v0.4 Bloque A: buyer surfaces no longer
 // accept a buyer_id argument (identity is derived from the token's sub) — a breaking
@@ -627,7 +628,44 @@ async function startGamRefresh(source: GamForecastSource): Promise<void> {
   }, GAM_REFRESH_INTERVAL_MS).unref();
 }
 
+// Single state owner (src/owner-lease.ts). Taken before any store is opened: a second node on the
+// same volume, or an operator command running against a live node, would otherwise overwrite
+// each other's writes (lost token issuance → head_hash_mismatch on the next boot; revocations
+// and DSR restrictions ignored; Art. 17 erasures undone). Module-level so the fatal-boot path can
+// release it too.
+const ownerLease = new OwnerLease();
+
+function releaseOwnerLease(): void {
+  try {
+    ownerLease.release();
+  } catch (err) {
+    process.stderr.write(`[lease] release failed: ${err instanceof Error ? err.message : String(err)}\n`);
+  }
+}
+
+// Release the lease on a graceful stop so an operator command can run right after
+// `docker compose stop`. Also makes SIGTERM effective when node is PID 1 in a container (no
+// default handler there — `docker stop` otherwise waits its full timeout and SIGKILLs).
+function installShutdownHandlers(): void {
+  for (const signal of ["SIGTERM", "SIGINT"] as const) {
+    process.once(signal, () => {
+      process.stderr.write(`[lease] ${signal} received — releasing state ownership and exiting.\n`);
+      releaseOwnerLease();
+      process.exit(0);
+    });
+  }
+}
+
 async function main() {
+  ownerLease.acquire("server");
+  installShutdownHandlers();
+  ownerLease.startHeartbeat(() => {
+    // Someone replaced our lease: another owner may now be writing the same files. Stop serving
+    // rather than keep writing state we no longer own (fail-closed).
+    process.stderr.write("[lease] FATAL: lost ownership of the state directory — refusing to keep writing. Exiting.\n");
+    process.exit(1);
+  });
+
   // Fail-closed: an invalid legal config (missing dsr_contact, bad retention) must
   // prevent startup — loadDeploymentConfigFromFile throws before anything serves.
   const deployment = loadDeploymentConfigFromFile();
@@ -737,7 +775,7 @@ async function main() {
   // Fail-closed: a head-hash mismatch or replay failure means the on-disk ledger is
   // suspect — refuse to start rather than serve with an untrustworthy audit trail.
   // First-run case (empty ledger, no anchor) is valid; verifyAfterRestore handles it.
-  const verifyResult = verifyAfterRestore(ledger.headHash(), () => ledger.replayVerify(), anchor);
+  const verifyResult = verifyAfterRestore(ledger.headHash(), () => ledger.replayVerify(), anchor, (seq) => ledger.hashAt(seq));
   if (!verifyResult.valid) {
     throw new Error(
       `[audit] FATAL: ledger integrity check failed on startup (${verifyResult.error}) — ` +
@@ -820,6 +858,7 @@ const isDirectRun = isEntrypoint(import.meta.url, process.argv[1]);
 if (isDirectRun) {
   main().catch((err: unknown) => {
     process.stderr.write(`Fatal: ${err instanceof Error ? err.message : String(err)}\n`);
+    releaseOwnerLease();
     process.exit(1);
   });
 }

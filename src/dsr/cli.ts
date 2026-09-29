@@ -13,8 +13,9 @@
 //   gam-seller-dsr suppress <buyer_id>     → crypto-shred + erase entitlement (Art. 17)
 //
 // It operates on the same file-backed stores the server persists — paths honor MCP_DATA_DIR
-// via config/paths — so an erasure here is the same erasure the running node reflects on its
-// next restart. This is not a separate copy of the data.
+// via config/paths — so an erasure here is the same erasure the node enforces when it starts.
+// This is not a separate copy of the data. It runs only while the node is stopped (owner lease,
+// src/owner-lease.ts): against a live node the write would be ignored or undone by the server.
 
 import { AuditLedger, DEV_LEDGER_PATH } from "../audit/ledger.js";
 import { PseudonymService, DEV_PSEUDONYM_KEYS_PATH } from "../audit/pseudonym.js";
@@ -26,6 +27,7 @@ import { loadDeploymentConfigFromFile } from "../config/deployment.js";
 import { DsrToolkit } from "./toolkit.js";
 import { IntentStore, DEV_INTENT_PATH } from "../intent/store.js";
 import { isEntrypoint } from "../entrypoint.js";
+import { runAsStateOwner } from "../owner-lease.js";
 
 // Narrow seam over the toolkit: exactly the methods the CLI drives. A test injects a fake so
 // it can exercise command dispatch without wiring the file-backed stores (their paths are
@@ -63,6 +65,13 @@ function defaultToolkit(): DsrToolkit {
   return new DsrToolkit({ store, ledger, retention, intentStore });
 }
 
+// True when argv is a well-formed DSR command. Lets a caller reject bad arguments before taking
+// the owner lease or touching any store (src/admin/cli.ts).
+export function dsrArgsValid(argv: string[]): boolean {
+  const [command, buyerId] = argv;
+  return Boolean(command && buyerId && COMMANDS.includes(command as DsrCommand));
+}
+
 // Returns a process exit code (0 = ok, 1 = usage error). Deliberately does NOT call
 // process.exit itself so it stays unit-testable; the bin entry maps the return value to the
 // process exit code.
@@ -71,7 +80,7 @@ export function runDsrCli(argv: string[], options: DsrCliOptions = {}): number {
   const err = options.err ?? ((line) => void process.stderr.write(line));
   const [command, buyerId] = argv;
 
-  if (!command || !buyerId || !COMMANDS.includes(command as DsrCommand)) {
+  if (!dsrArgsValid(argv)) {
     err(`Usage: gam-seller-dsr <${COMMANDS.join("|")}> <buyer_id>\n`);
     return 1;
   }
@@ -110,6 +119,9 @@ export function runDsrCli(argv: string[], options: DsrCliOptions = {}): number {
 
 // Run only when invoked directly (as the bin), not when imported by a test. isEntrypoint is
 // symlink-aware — the npx bin is a node_modules/.bin symlink (see src/entrypoint.ts, #60).
+// The bin runs as the single state owner: refused (exit 3) while the node is running, instead of
+// a restriction the live node would ignore or an erasure it would silently undo.
 if (isEntrypoint(import.meta.url, process.argv[1])) {
-  process.exit(runDsrCli(process.argv.slice(2)));
+  const argv = process.argv.slice(2);
+  process.exit(dsrArgsValid(argv) ? await runAsStateOwner(() => runDsrCli(argv)) : runDsrCli(argv));
 }

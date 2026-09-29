@@ -237,10 +237,15 @@ RS256 keys are stored in `keys/node.private.jwk.json` (gitignored). To rotate:
 
 ## GDPR / data-subject requests
 
-The node ships a **DSR operator CLI** (`gam-seller-dsr`) that handles Art. 15/17/18/20 requests
-for buyer audit data. It operates on the same file-backed stores the server persists (paths
-honor `MCP_DATA_DIR`), so an erasure is reflected by the node on its next restart — it is not a
-separate copy of the data.
+The node ships a **DSR operator CLI** (`gam-seller-dsr`, also `gam-seller-admin dsr`) that handles
+Art. 15/17/18/20 requests for buyer audit data. It operates on the same file-backed stores the
+server persists (paths honor `MCP_DATA_DIR`) — it is not a separate copy of the data.
+
+**Run it with the node stopped.** A running node owns its state directory (owner lease) and the
+CLI is refused with exit code 3. This is deliberate: the node keeps its stores in memory, so a
+restriction written behind its back would not be enforced until a restart, and an erasure would
+be undone by the node's next write. Stop the node, run the command, start the node — the
+restriction or erasure is enforced from that boot on.
 
 ```bash
 # Installed via npm (the bin is on PATH after `npm i -g gam-seller-mcp-node`),
@@ -251,11 +256,13 @@ npx --package gam-seller-mcp-node gam-seller-dsr restrict <buyer_id>   # Art. 18
 npx --package gam-seller-mcp-node gam-seller-dsr unrestrict <buyer_id> # Art. 18 — lift a restriction
 ```
 
-In a Docker deployment, invoke the same bin against the node's data volume so it acts on the
-live state:
+In a Docker deployment, run the same bin in a one-off container with the service's volumes and
+config, while the node is stopped:
 
 ```bash
-docker run --rm -v mcp-data:/app/data --entrypoint gam-seller-dsr <image> suppress <buyer_id>
+docker compose stop seller-mcp-node
+docker compose run --rm --no-deps seller-mcp-node gam-seller-dsr suppress <buyer_id>
+docker compose start seller-mcp-node
 ```
 
 To drive the toolkit programmatically from an installed package, import it from the built
@@ -316,8 +323,9 @@ MCP_INTENT_HANDOFF=file                  # close the handoff loop to your sales 
 
 - Put the HTTP transport behind a reverse proxy that terminates **TLS** (the node speaks plaintext
   HTTP on loopback by design — issue #86).
-- Mint buyer tokens with [`scripts/issue-buyer-token.ts`](../scripts/issue-buyer-token.ts) and hand
-  one to each buyer agent; identity is derived from the token's `sub`, never a request argument.
+- Mint buyer tokens with `gam-seller-admin issue-token <buyer_id>` (node stopped; in Docker, see
+  [`deploy/README.md`](../deploy/README.md)) and hand one to each buyer agent; identity is derived
+  from the token's `sub`, never a request argument.
 - Verify the boot log shows `Seeded forecast source active` and `Intent handoff sink active`, and
   that **no** `[demo]` line appears (proof you are on real config, not the example).
 

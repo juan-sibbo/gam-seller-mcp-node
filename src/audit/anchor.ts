@@ -183,10 +183,15 @@ export class HeadHashAnchor {
 }
 
 // Restore verification — decision-package Bloque 2 §2.3.
-// Step 1 (head-hash-first): compare latest anchored hash against ledger head hash.
-//   If mismatch: chain is suspect, do not proceed.
-// Step 2 (full replay): verify every entry's hash and chain linkage.
-//   If any entry fails: chain is tampered.
+// Step 1 (anchor-first): the latest anchor pins a PREFIX of the chain — the entry at its seq must
+//   still carry the anchored hash. If it does not (rewritten history) or is gone (truncation below
+//   the anchor), the chain is suspect: do not proceed.
+// Step 2 (full replay): verify every entry's hash and chain linkage, including the tail after
+//   the anchor. If any entry fails: chain is tampered.
+// Entries after the latest anchor are the legitimate unanchored tail — the exposure window the
+// 60-min anchoring cadence ratifies. Comparing the anchor against the CURRENT head instead (the
+// previous implementation) rejected every node that served traffic after its last anchor, so a
+// restart after any activity failed head_hash_mismatch.
 export interface RestoreVerifyResult {
   valid: boolean;
   headHashMatch: boolean;
@@ -197,7 +202,8 @@ export interface RestoreVerifyResult {
 export function verifyAfterRestore(
   ledgerHeadHash: string,
   replayVerify: () => { valid: boolean; failedAt?: number; error?: string },
-  anchor: HeadHashAnchor
+  anchor: HeadHashAnchor,
+  hashAt: (seq: number) => string | undefined
 ): RestoreVerifyResult {
   const latestAnchor = anchor.latest();
 
@@ -208,10 +214,15 @@ export function verifyAfterRestore(
     return { valid: headHashMatch, headHashMatch, error: headHashMatch ? undefined : "no_anchor_but_non_empty_ledger" };
   }
 
-  // Step 1: head-hash-first check
-  const headHashMatch = latestAnchor.head_hash === ledgerHeadHash;
+  // Step 1: anchor-first check — the anchored entry is still in the chain, unchanged.
+  const anchoredHash = hashAt(latestAnchor.seq);
+  const headHashMatch = anchoredHash === latestAnchor.head_hash;
   if (!headHashMatch) {
-    return { valid: false, headHashMatch, error: "head_hash_mismatch" };
+    return {
+      valid: false,
+      headHashMatch,
+      error: anchoredHash === undefined ? "anchored_entry_missing" : "anchored_prefix_mismatch",
+    };
   }
 
   // Step 2: full replay
