@@ -12,10 +12,19 @@ name: publish
 # Secrets required:
 #   NPM_TOKEN — a granular npm token with publish rights on gam-seller-mcp-node.
 # The MCP Registry step uses GitHub OIDC (id-token: write) and needs no secret.
+#
+# Re-runnable: if the npm version already exists the npm step is skipped, and the registry step
+# retries while npm propagates. To finish a release whose registry step failed, run this workflow
+# manually with the existing tag (Actions → publish → Run workflow, tag = v0.9.0).
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to (re)publish, e.g. v0.9.0"
+        required: true
 
 jobs:
   publish:
@@ -23,8 +32,12 @@ jobs:
     permissions:
       id-token: write # OIDC → MCP Registry auth + npm provenance
       contents: read
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: actions/setup-node@v7
         with:
@@ -42,15 +55,22 @@ jobs:
       # Guard: the tag must match package.json (npm publish uses package.json's version).
       - name: Verify tag matches package.json version
         run: |
-          TAG="${GITHUB_REF#refs/tags/v}"
+          TAG="${RELEASE_TAG#v}"
           PKG="$(node -p "require('./package.json').version")"
           if [ "$TAG" != "$PKG" ]; then
             echo "Tag v$TAG does not match package.json version $PKG" >&2
             exit 1
           fi
 
+      # Idempotent: a re-run over an already-published version skips npm instead of failing.
       - name: Publish to npm (public, with provenance)
-        run: npm publish --provenance --access public
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          if npm view "gam-seller-mcp-node@$VERSION" version >/dev/null 2>&1; then
+            echo "gam-seller-mcp-node@$VERSION already on npm — skipping publish"
+          else
+            npm publish --provenance --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -61,12 +81,20 @@ jobs:
 
       - name: Sync server.json version from the tag
         run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
+          VERSION="${RELEASE_TAG#v}"
           jq --arg v "$VERSION" '.version = $v | .packages[0].version = $v' server.json > server.tmp
           mv server.tmp server.json
 
       - name: Authenticate to MCP Registry (OIDC)
         run: ./mcp-publisher login github-oidc
 
+      # The registry validates the npm version exists; right after npm publish it can briefly
+      # 404, so retry for up to ~5 minutes before failing.
       - name: Publish to MCP Registry
-        run: ./mcp-publisher publish
+        run: |
+          for attempt in $(seq 1 10); do
+            if ./mcp-publisher publish; then exit 0; fi
+            echo "Registry publish failed (attempt $attempt/10) — waiting for npm propagation"
+            sleep 30
+          done
+          exit 1
