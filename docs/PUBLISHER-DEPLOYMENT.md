@@ -351,6 +351,28 @@ bucket. Buyers are answered from that snapshot (`synthetic: false`); a buyer req
 triggers a GAM call. A family missing from `gam.json` or a period outside the snapshot returns
 `NOT_FOUND`.
 
+**Disclosure policy — what `check_availability` reveals.** Buyers never see the forecast itself.
+They see your *commercial availability*: the forecast after an optional safety margin, rounded down
+to a step of your ladder. Set it in the optional `disclosure` block of `gam.json` (or
+`forecast.json`):
+
+```json
+"disclosure": { "ladder": [1, 2, 5], "haircut": 1, "min_quantity": 1000 }
+```
+
+- `ladder` — steps per decade. `[1, 2, 5]` gives 1k, 2k, 5k, 10k, 20k, 50k… A coarser ladder (`[1]`,
+  orders of magnitude) reveals less; a finer one (`[1, 1.5, 2, 3, 5, 7]`) is more useful to buyers.
+- `haircut` — fraction of the forecast you offer, (0, 1]. Default 1 (no margin); lower it if your
+  forecasts are volatile.
+- `min_quantity` — below this, the answer is `unavailable`. Hides the long tail of tiny volumes.
+
+The rounding itself cannot be turned off: every answer is computed from the rounded value, which is
+what stops a buyer from finding the exact forecast by asking with slightly different volumes.
+
+**Forecast conditions.** GAM's availability depends on the prospective line item: dates, sizes,
+ad units, environment and priority. Mirror how the product is really sold — set `priority` (6–10,
+STANDARD line items) on a family when it is not sold at GAM's default priority.
+
 > **WSL2 note.** If the log shows `fetch failed (ETIMEDOUT)` while other tools reach Google fine,
 > Node's IPv4/IPv6 fallback is giving up too early. Start the node with
 > `NODE_OPTIONS=--network-family-autoselection-attempt-timeout=2000`.

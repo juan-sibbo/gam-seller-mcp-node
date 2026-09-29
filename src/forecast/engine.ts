@@ -4,7 +4,8 @@
 // Z3 invariant: response contains no user-level attributes (audience, segment, TC String).
 // Rate limit: N=1/T=30s per buyer_id applied in server.ts (same class as discover_products).
 
-import type { ForecastSource } from "./source.js";
+import { DEFAULT_DISCLOSURE_POLICY, quantizeAvailability, type DisclosurePolicy } from "./disclosure-policy.js";
+import type { AvailabilityEstimate, ForecastSource } from "./source.js";
 
 // Bucket values — s5-forecast-demo-mode-authorization §bucket-ranges (placeholder for demo).
 // Production ranges are [[por definir]] pending pilot publisher inventory data (blocker #6).
@@ -36,6 +37,37 @@ export interface ForecastResult {
   legal_basis_provenance: null; // Pilar 3 reserved field
 }
 
+export const AVAILABILITY_STATUS = {
+  AVAILABLE: "available",     // the requested volume fits under the disclosed availability
+  PARTIAL: "partial",         // some volume is available — up to deliverable_up_to
+  UNAVAILABLE: "unavailable", // nothing disclosable for this family × period
+} as const;
+
+export type AvailabilityStatus = (typeof AVAILABILITY_STATUS)[keyof typeof AVAILABILITY_STATUS];
+
+// check_availability result. `deliverable_up_to` is the publisher's commercial availability (a
+// ladder step after the disclosure policy), never the raw forecast. It is an estimate under the
+// product's forecast conditions, not a reservation.
+export interface AvailabilityResult {
+  family_id: string;
+  period: string;
+  requested_impressions: number;
+  status: AvailabilityStatus;
+  deliverable_up_to: number;
+  as_of: string | null;
+  valid_for_seconds: number;
+  synthetic: boolean;
+  consent_context: null;
+  legal_basis_provenance: null;
+}
+
+// Pure decision: a function of (commercial availability, requested) ONLY. Keeping the raw estimate
+// out of this function is what makes repeated questions reveal nothing beyond the ladder step.
+export function decideAvailability(commercial: number, requested: number): AvailabilityStatus {
+  if (commercial <= 0) return AVAILABILITY_STATUS.UNAVAILABLE;
+  return requested <= commercial ? AVAILABILITY_STATUS.AVAILABLE : AVAILABILITY_STATUS.PARTIAL;
+}
+
 // Default source: deterministic synthetic buckets, zero GAM. The bucket algorithm used to
 // live inside ForecastEngine; it is extracted here so the engine depends on the ForecastSource
 // seam (source.ts) instead of a hardwired formula. Swapping in a real (GAM) source is a
@@ -44,14 +76,24 @@ export class SyntheticForecastSource implements ForecastSource {
   // Deterministic bucket assignment from family_id + period.
   // Same input always produces the same bucket — demo is reproducible across runs.
   async getAvailsBucket(family_id: string, period: string): Promise<ForecastBucket> {
-    const seed = family_id + period;
-    let hash = 0;
-    for (let i = 0; i < seed.length; i++) {
-      hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
-    }
     const buckets: ForecastBucket[] = [FORECAST_BUCKET.LOW, FORECAST_BUCKET.MID, FORECAST_BUCKET.HIGH];
-    return buckets[hash % 3]!;
+    return buckets[syntheticHash(family_id + period) % 3]!;
   }
+
+  // Deterministic illustrative volumes for the demo (labeled synthetic: true downstream).
+  async getAvailability(family_id: string, period: string): Promise<AvailabilityEstimate> {
+    return { units: SYNTHETIC_UNITS[syntheticHash(family_id + period) % SYNTHETIC_UNITS.length]!, asOf: null };
+  }
+}
+
+const SYNTHETIC_UNITS = [180_000, 950_000, 2_600_000, 8_300_000, 24_000_000];
+
+function syntheticHash(seed: string): number {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  }
+  return hash;
 }
 
 export class ForecastEngine {
@@ -59,7 +101,10 @@ export class ForecastEngine {
   // working unchanged. `synthetic` is derived from the source's own `live` declaration: only
   // GamForecastSource (a live ForecastService snapshot) sets it, so synthetic and seeded data stay
   // labeled synthetic: true.
-  constructor(private readonly source: ForecastSource = new SyntheticForecastSource()) {}
+  constructor(
+    private readonly source: ForecastSource = new SyntheticForecastSource(),
+    private readonly policy: DisclosurePolicy = DEFAULT_DISCLOSURE_POLICY
+  ) {}
 
   async forecast(family_id: string, period: string): Promise<ForecastResult> {
     const bucket = await this.source.getAvailsBucket(family_id, period);
@@ -69,6 +114,28 @@ export class ForecastEngine {
       bucket,
       bucket_label: BUCKET_LABELS[bucket],
       ttl_seconds: FORECAST_TTL_SECONDS,
+      synthetic: this.source.live !== true,
+      consent_context: null,
+      legal_basis_provenance: null,
+    };
+  }
+
+  // "Can you deliver `requested` impressions of this family in this period?" The raw estimate is
+  // quantized by the publisher's disclosure policy before the decision is taken.
+  async checkAvailability(family_id: string, period: string, requested: number): Promise<AvailabilityResult> {
+    if (!this.source.getAvailability) {
+      throw new Error("forecast source does not support availability checks");
+    }
+    const estimate = await this.source.getAvailability(family_id, period);
+    const commercial = quantizeAvailability(estimate.units, this.policy);
+    return {
+      family_id,
+      period,
+      requested_impressions: requested,
+      status: decideAvailability(commercial, requested),
+      deliverable_up_to: commercial,
+      as_of: estimate.asOf === null ? null : new Date(estimate.asOf).toISOString(),
+      valid_for_seconds: FORECAST_TTL_SECONDS,
       synthetic: this.source.live !== true,
       consent_context: null,
       legal_basis_provenance: null,

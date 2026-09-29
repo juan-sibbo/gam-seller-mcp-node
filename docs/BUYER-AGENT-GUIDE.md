@@ -167,6 +167,32 @@ the publisher's live Google Ad Manager forecast (refreshed every 30 minutes); `s
 means it is generated or pre-loaded data, not a live read. A publisher on live GAM answers only the
 families and periods it has mapped: anything else returns `NOT_FOUND`.
 
+### `check_availability`
+
+Ask whether the publisher can deliver a volume: `family_id`, `period` and `impressions`.
+
+```json
+{
+  "family_id": "display-ros",
+  "period": "2026-10",
+  "requested_impressions": 2800000,
+  "status": "partial",
+  "deliverable_up_to": 2000000,
+  "as_of": "2026-10-03T10:30:00.000Z",
+  "valid_for_seconds": 1800,
+  "synthetic": false,
+  "request_id": "..."
+}
+```
+
+`status` is `available` (your volume fits), `partial` (the publisher can offer up to
+`deliverable_up_to`) or `unavailable`. `deliverable_up_to` is the publisher's **commercial
+availability**: its forecast for this product and period, rounded down to a step of its disclosure
+policy (for example 1, 2, 5, 10, 20, 50… thousand). It is an estimate under the product's forecast
+conditions, not a reservation — to commit, use `create_intent`. Asking again with different volumes
+does not reveal more than that step. `as_of` is when the forecast was taken; `synthetic` works as in
+`get_forecast`.
+
 ### `create_intent`
 
 ```json
@@ -214,8 +240,8 @@ Possible codes:
 | `AUTH_FAILED` | Missing/invalid/revoked token, or the token's buyer is not entitled |
 | `RATE_LIMITED` | Exceeded N=1/T=30s per buyer (identity from token.sub) |
 | `INVALID_REQUEST` | Missing or duplicate `client_request_id`; or a stale/mismatched `price_ref` on `create_intent`; or a `revoke_intent` that matches none of your own active intents |
-| `NOT_FOUND` | `get_forecast` on a live-GAM node for a family or period it does not forecast |
-| `UNAVAILABLE` | `get_forecast` on a live-GAM node whose forecast is not loaded yet or is out of date; retry later |
+| `NOT_FOUND` | `get_forecast` / `check_availability` for a family or period the node does not forecast |
+| `UNAVAILABLE` | `get_forecast` / `check_availability` on a live-GAM node whose forecast is not loaded yet or is out of date; retry later |
 
 Error responses are deliberately opaque: `AUTH_FAILED` covers all denial reasons to prevent
 probing for entitlement structure.

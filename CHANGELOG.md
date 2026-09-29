@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+### `check_availability` — an answer a buyer can act on
+
+- **New tool** (`family_id`, `period`, `impressions`): answers `available`, `partial` (up to
+  `deliverable_up_to`) or `unavailable`, with `as_of` and `valid_for_seconds`. Served from the same
+  forecast source as `get_forecast` (live GAM snapshot, seeded or synthetic); no outbound call on
+  the request path. `get_forecast` and its Low/Mid/High buckets stay for compatibility.
+- **Publisher disclosure policy** (`disclosure` block in `gam.json` / `forecast.json`): the forecast
+  estimate is reduced to *commercial availability* — optional haircut, then floored to a step of
+  the publisher's ladder (default 1-2-5), zero below `min_quantity`. Buyers only ever see that
+  value; the raw forecast stays in the process and never reaches responses or the ledger.
+- **No-oracle by construction:** the decision is a pure function of the rounded value, so no
+  sequence of questions reveals more than the ladder step. Pinned by property tests, including a
+  binary-search prober that converges to the step, never to the forecast. The rounding cannot be
+  configured away.
+- **Product-shaped forecasts:** `gam.json` families accept `priority` (6–10), sent on the
+  prospective line item, because GAM availability is conditioned on it.
+
 ## [0.10.0] — 2026-09-29 — live GAM forecast
 
 ### Live Google Ad Manager forecast (#4, #115)

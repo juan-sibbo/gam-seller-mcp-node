@@ -41,6 +41,12 @@ Buyer agent
     │       Returns: Low / Mid / High availability bucket.
     │       Never returns: exact impression counts, CPM curves, floor prices.
     │
+    ├── check_availability        ← Can you deliver 2.8M impressions of this family in October?
+    │       Returns: available / partial (up to ~2M) / unavailable, as of the last forecast.
+    │       The volume is rounded down to a step of the publisher's disclosure policy
+    │       (e.g. 1-2-5), so repeated questions never reveal more than that step.
+    │       Never returns: the raw forecast, other buyers' bookings, floor prices.
+    │
     ├── create_intent             ← Commit to a product at its current firm price (with TTL).
     │       Records a firm, time-boxed buying intent — rejected if the price is stale or
     │       mismatched. NOT a GAM order and NOT an inventory hold; it is the handoff artifact
@@ -231,7 +237,7 @@ until it is declared on purpose.
 |----------|--------------|-------------|--------------|-------------------|
 | Raw GAM API | Everything in the account | Full CRUD | Logging only | Poor (SOAP/REST, no MCP) |
 | OpenRTB bid requests | User-level data, floor prices | Bid-only | None | Poor |
-| **This server** | Coarse families + bucket forecasts | Buyer's own soft commitment only (no GAM writes) | Hash-chained ledger | Native MCP |
+| **This server** | Families + availability checks (rounded by the publisher's policy) | Buyer's own soft commitment only (no GAM writes) | Hash-chained ledger | Native MCP |
 
 ## Current status
 

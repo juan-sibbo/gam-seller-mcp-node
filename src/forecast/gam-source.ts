@@ -10,7 +10,9 @@ import {
   validateThresholds,
   type ForecastThresholds,
 } from "./seeded-source.js";
-import type { ForecastSource } from "./source.js";
+import { ForecastUnavailableError, type AvailabilityEstimate, type ForecastSource } from "./source.js";
+
+export { ForecastUnavailableError };
 
 // GamForecastSource — live availability from GAM's ForecastService (DP-AB-01 §5.2, issue #4).
 //
@@ -20,9 +22,12 @@ import type { ForecastSource } from "./source.js";
 // GAM, and the call volume is fixed by operator config (families × periods per cycle).
 //
 // Each forecast is a PROSPECTIVE line item — built in memory, sent to getAvailabilityForecast,
-// never saved. Nothing in GAM is created, modified or reserved. Only `availableUnits` is used, and
-// it is reduced to a Low/Mid/High bucket before it leaves this module (no raw avails to buyers or
-// to the ledger — KANON §Logs-y-Audit).
+// never saved. Nothing in GAM is created, modified or reserved. Only `availableUnits` is kept. It
+// is a forecast CONDITIONED on that prospective line item (type, priority, dates, sizes, ad units),
+// so a family's targeting should mirror how the product is really sold. The raw figure stays inside
+// the node: buyers see a Low/Mid/High bucket (get_forecast) or the publisher's commercial
+// availability after the disclosure policy (check_availability) — never availableUnits itself, and
+// the ledger records neither (KANON §Logs-y-Audit).
 //
 // Config (config/gam.json — OPT-IN; absent → seeded/synthetic source, unchanged behavior):
 //   {
@@ -32,10 +37,11 @@ import type { ForecastSource } from "./source.js";
 //     "thresholds": { "mid": 1000000, "high": 10000000 },  // optional; same semantics as forecast.json
 //     "periods": ["2026-10", "Q4-2026"],                  // optional; default: rolling window
 //     "families": {
-//       "display-ros":    { "sizes": ["300x250", "728x90"] },                       // whole network
+//       "display-ros":    { "sizes": ["300x250", "728x90"], "priority": 8 },        // whole network
 //       "video-pre-roll": { "sizes": ["640x480"], "environment": "VIDEO_PLAYER",
 //                           "ad_unit_ids": ["21700000000"] }
-//     }
+//     },
+//     "disclosure": { "ladder": [1, 2, 5], "haircut": 1, "min_quantity": 1000 }   // optional
 //   }
 
 export const GAM_CONFIG_FILE = "gam.json";
@@ -56,6 +62,7 @@ const ENVIRONMENTS = new Set(["BROWSER", "VIDEO_PLAYER"]);
 export interface GamFamilyTargeting {
   sizes: Array<{ width: number; height: number }>;
   environment: "BROWSER" | "VIDEO_PLAYER";
+  priority?: number; // STANDARD line item priority, 6–10; absent → GAM's default
   adUnitIds?: string[]; // absent → the network's effective root ad unit, descendants included
 }
 
@@ -65,13 +72,6 @@ export interface GamForecastSourceConfig {
   periods?: string[]; // absent → rolling window recomputed each cycle
 }
 
-// Raised when a buyer asks for something the snapshot cannot answer. Buyer-safe by construction:
-// the server maps it to NOT_FOUND / UNAVAILABLE without the message.
-export class ForecastUnavailableError extends Error {
-  constructor(readonly reason: "unknown_family" | "unknown_period" | "not_ready" | "stale") {
-    super(`forecast unavailable: ${reason}`);
-  }
-}
 
 export interface DateParts {
   year: number;
@@ -171,6 +171,7 @@ export function prospectiveLineItemXml(args: {
     start +
     dateTimeXml("endDateTime", range.end, true, timeZone) +
     `<lineItemType>STANDARD</lineItemType>` +
+    (targeting.priority !== undefined ? `<priority>${targeting.priority}</priority>` : "") +
     `<costPerUnit><currencyCode>${xmlEscape(currencyCode)}</currencyCode><microAmount>1000000</microAmount></costPerUnit>` +
     `<costType>CPM</costType>` +
     placeholders +
@@ -197,6 +198,7 @@ interface NetworkInfo {
 
 interface SnapshotEntry {
   bucket: ForecastBucket;
+  available: number; // raw availableUnits — in-process only, never serialized to a buyer or the ledger
   fetchedAt: number;
 }
 
@@ -231,13 +233,22 @@ export class GamForecastSource implements ForecastSource {
   ) {}
 
   async getAvailsBucket(family_id: string, period: string): Promise<ForecastBucket> {
+    return this.freshEntry(family_id, period).bucket;
+  }
+
+  async getAvailability(family_id: string, period: string): Promise<AvailabilityEstimate> {
+    const entry = this.freshEntry(family_id, period);
+    return { units: entry.available, asOf: entry.fetchedAt };
+  }
+
+  private freshEntry(family_id: string, period: string): SnapshotEntry {
     if (!this.config.families.has(family_id)) throw new ForecastUnavailableError("unknown_family");
     const entry = this.snapshot.get(seedKey(family_id, period));
     if (entry === undefined) {
       throw new ForecastUnavailableError(this.network === null ? "not_ready" : "unknown_period");
     }
     if (this.now() - entry.fetchedAt > GAM_MAX_STALENESS_MS) throw new ForecastUnavailableError("stale");
-    return entry.bucket;
+    return entry;
   }
 
   snapshotSize(): number {
@@ -280,6 +291,7 @@ export class GamForecastSource implements ForecastSource {
           if (!Number.isFinite(available)) throw new Error(`[gam] forecast response without availableUnits`);
           this.snapshot.set(seedKey(family_id, period), {
             bucket: bucketForImpressions(available, this.config.thresholds),
+            available,
             fetchedAt: this.now(),
           });
           report.ok++;
@@ -327,7 +339,7 @@ function parseFamilies(raw: unknown): Map<string, GamFamilyTargeting> {
   }
   const families = new Map<string, GamFamilyTargeting>();
   for (const [family_id, value] of Object.entries(raw)) {
-    const f = value as { sizes?: unknown; environment?: unknown; ad_unit_ids?: unknown };
+    const f = value as { sizes?: unknown; environment?: unknown; ad_unit_ids?: unknown; priority?: unknown };
     if (!Array.isArray(f.sizes) || f.sizes.length === 0) {
       throw new Error(`[gam] gam.json families.${family_id}: "sizes" must be a non-empty array.`);
     }
@@ -341,9 +353,14 @@ function parseFamilies(raw: unknown): Map<string, GamFamilyTargeting> {
     ) {
       throw new Error(`[gam] gam.json families.${family_id}: ad_unit_ids must be a non-empty array of numeric strings.`);
     }
+    if (f.priority !== undefined && (typeof f.priority !== "number" || !Number.isInteger(f.priority) || f.priority < 6 || f.priority > 10)) {
+      // GAM accepts 6–10 for STANDARD line items (INVALID_PRIORITY_FOR_LINE_ITEM_TYPE otherwise).
+      throw new Error(`[gam] gam.json families.${family_id}: priority must be an integer from 6 to 10.`);
+    }
     families.set(family_id, {
       sizes: f.sizes.map((s, i) => parseSize(s, `families.${family_id}.sizes[${i}]`)),
       environment: environment as GamFamilyTargeting["environment"],
+      ...(f.priority !== undefined ? { priority: f.priority as number } : {}),
       ...(f.ad_unit_ids ? { adUnitIds: f.ad_unit_ids as string[] } : {}),
     });
   }
