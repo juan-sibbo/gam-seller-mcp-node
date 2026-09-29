@@ -15,8 +15,9 @@
   `anchored_entry_missing` if the chain was truncated below the anchor), then replays the whole
   chain including the unanchored tail. The tail is the exposure window the 60-min cadence already
   accepts. `AuditLedger.hashAt(seq)` supports the check (rotation-aware).
-- **Canon:** this reinterprets decision-package §2.3 ("head-hash-first" compared against the head).
-  Pending owner sign-off.
+- **Canon:** amends how decision-package §2.3 ("head-hash-first, then full replay") is applied —
+  the anchor is compared against the entry it anchored, not the current head. Signed by the owner
+  2026-09-30.
 - Regression: `tests/restart-after-traffic.test.ts` and the end-to-end restart in
   `tests/owner-lease-e2e.test.ts` (fails under the previous rule).
 
