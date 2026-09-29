@@ -162,8 +162,10 @@ and the price has not expired. Absent `pricing_options` means "no published pric
 }
 ```
 
-`bucket` is one of `"low"`, `"mid"`, or `"high"`. `synthetic: true` means the data is not from
-a live GAM connection — the real adapter is in progress.
+`bucket` is one of `"low"`, `"mid"`, or `"high"`. `synthetic: false` means the bucket comes from
+the publisher's live Google Ad Manager forecast (refreshed every 30 minutes); `synthetic: true`
+means it is generated or pre-loaded data, not a live read. A publisher on live GAM answers only the
+families and periods it has mapped: anything else returns `NOT_FOUND`.
 
 ### `create_intent`
 
@@ -212,6 +214,8 @@ Possible codes:
 | `AUTH_FAILED` | Missing/invalid/revoked token, or the token's buyer is not entitled |
 | `RATE_LIMITED` | Exceeded N=1/T=30s per buyer (identity from token.sub) |
 | `INVALID_REQUEST` | Missing or duplicate `client_request_id`; or a stale/mismatched `price_ref` on `create_intent`; or a `revoke_intent` that matches none of your own active intents |
+| `NOT_FOUND` | `get_forecast` on a live-GAM node for a family or period it does not forecast |
+| `UNAVAILABLE` | `get_forecast` on a live-GAM node whose forecast is not loaded yet or is out of date; retry later |
 
 Error responses are deliberately opaque: `AUTH_FAILED` covers all denial reasons to prevent
 probing for entitlement structure.

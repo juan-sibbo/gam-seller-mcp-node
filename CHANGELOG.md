@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.10.0] — 2026-09-29 — live GAM forecast
+
+### Live Google Ad Manager forecast (#4, #115)
+
+- **`GamForecastSource` is real.** Opt-in via `config/gam.json` (template:
+  `config/examples/pilot-publisher/gam.sample.json`): network code, service-account key path
+  (`GAM_SA_KEY_PATH` wins) and, per catalog family, its GAM targeting — sizes, environment
+  (`BROWSER` / `VIDEO_PLAYER`) and optional ad units. Without the file nothing changes.
+  Precedence: `gam.json` > `forecast.json` > synthetic.
+- **Snapshot model.** The node calls `ForecastService.getAvailabilityForecast` for every configured
+  family × period at boot and every 30 minutes, and answers buyers from that snapshot. A buyer
+  request never makes an outbound call, so buyers cannot generate load on the publisher's GAM.
+  A pair whose last good value is older than 90 minutes is withheld.
+- **Read-only by construction.** Forecasts use prospective line items that are never saved —
+  nothing in GAM is created, modified or reserved. Only `availableUnits` is kept, reduced to a
+  Low/Mid/High bucket; raw availability never reaches buyers or the ledger.
+- **No new dependencies.** Service-account OAuth uses `jose`; the two SOAP operations are built by
+  hand (Google ships no Node client), following the XSD element order of the official client.
+  Video line items carry `requestPlatformTargeting` and `videoMaxDuration`, which GAM requires.
+- **Scope, honestly:** forecast only. Catalog families are still mapped to GAM targeting by hand,
+  prices stay static list prices, and the adapter has been validated against one GAM network.
+
+### Buyer-facing changes
+
+- **`synthetic` can now be `false`.** It is derived from the forecast source: `false` only for the
+  live GAM snapshot, `true` for synthetic and seeded data as before. Buyers that treated it as a
+  constant should read it.
+- **`get_forecast` errors.** On a live-GAM node, a family or period outside the snapshot returns
+  `NOT_FOUND`; a snapshot not loaded yet or out of date returns `UNAVAILABLE`. Any other forecast
+  error returns the generic `INTERNAL_ERROR` — previously an unexpected error message thrown by a
+  source could be echoed to the buyer by the MCP SDK.
+
+### Operators
+
+- **Egress surface:** `src/gam/auth.ts` and `src/gam/soap.ts` are declared (Google OAuth + Ad
+  Manager SOAP, boot and refresh cycle only), pinned by `tests/egress-surface.test.ts`.
+- **Boot log:** `[forecast] GAM initial snapshot: N ok, M failed, K skipped`, with the GAM fault per
+  failed pair. Refresh failures never stop the node.
+- **Metrics:** new `unavailable` outcome on the tool-outcome counter.
+- **WSL2:** if the log shows `fetch failed (ETIMEDOUT)`, start with
+  `NODE_OPTIONS=--network-family-autoselection-attempt-timeout=2000`.
+
 ## [0.9.0] — 2026-09-29 — disclosure gate, idempotency by default, real-inventory pilot enablement
 
 ### ⚠️ Breaking: idempotency key required by default
