@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.11.1] — 2026-09-30 — a node that restarts
 
 ### Fixed — a node that served traffic could not restart (`head_hash_mismatch`)
 
